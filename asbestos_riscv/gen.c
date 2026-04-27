@@ -262,6 +262,15 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
             case 5: { extern void gadget_rv_sra(void); gadget = gadget_rv_sra; break; }
             default: break;
             }
+        } else if (insn->funct7 == 0x01) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_mul(void); gadget = gadget_rv_mul; break; }
+            case 4: { extern void gadget_rv_div(void); gadget = gadget_rv_div; break; }
+            case 5: { extern void gadget_rv_divu(void); gadget = gadget_rv_divu; break; }
+            case 6: { extern void gadget_rv_rem(void); gadget = gadget_rv_rem; break; }
+            case 7: { extern void gadget_rv_remu(void); gadget = gadget_rv_remu; break; }
+            default: break;
+            }
         }
         if (gadget != NULL)
             goto gen_reg;
@@ -278,6 +287,15 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
             switch (insn->funct3) {
             case 0: { extern void gadget_rv_subw(void); gadget = gadget_rv_subw; break; }
             case 5: { extern void gadget_rv_sraw(void); gadget = gadget_rv_sraw; break; }
+            default: break;
+            }
+        } else if (insn->funct7 == 0x01) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_mulw(void); gadget = gadget_rv_mulw; break; }
+            case 4: { extern void gadget_rv_divw(void); gadget = gadget_rv_divw; break; }
+            case 5: { extern void gadget_rv_divuw(void); gadget = gadget_rv_divuw; break; }
+            case 6: { extern void gadget_rv_remw(void); gadget = gadget_rv_remw; break; }
+            case 7: { extern void gadget_rv_remuw(void); gadget = gadget_rv_remuw; break; }
             default: break;
             }
         }

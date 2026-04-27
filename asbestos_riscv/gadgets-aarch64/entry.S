@@ -535,6 +535,91 @@ NAME(fiber_exit):
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
 
+.rv_gadget mul
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    mul x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget div
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz x8, 1f
+    mov x9, 1
+    lsl x9, x9, 63
+    cmp x6, x9
+    b.ne 2f
+    cmn x8, 1
+    b.eq 3f
+2:
+    sdiv x6, x6, x8
+    b 3f
+1:
+    mov x6, -1
+3:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget divu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz x8, 1f
+    udiv x6, x6, x8
+    b 2f
+1:
+    mov x6, -1
+2:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget rem
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    mov x9, x6
+    cbz x8, 3f
+    mov x10, 1
+    lsl x10, x10, 63
+    cmp x6, x10
+    b.ne 1f
+    cmn x8, 1
+    b.eq 2f
+1:
+    sdiv x10, x6, x8
+    msub x6, x10, x8, x6
+    b 3f
+2:
+    mov x6, xzr
+    b 3f
+3:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget remu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz x8, 1f
+    udiv x9, x6, x8
+    msub x6, x9, x8, x6
+1:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
 .rv_gadget and
     ldr x3, [_ip]
     ldr x4, [_ip, 8]
@@ -624,6 +709,96 @@ NAME(fiber_exit):
     rv_load_x x6, x4
     rv_load_x x8, x5
     add w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget mulw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    mul w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget divw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz w8, 1f
+    mov w9, 0x80000000
+    cmp w6, w9
+    b.ne 2f
+    cmn w8, 1
+    b.eq 3f
+2:
+    sdiv w6, w6, w8
+    b 4f
+1:
+    mov x6, -1
+    b 5f
+3:
+    mov w6, w9
+4:
+    sxtw x6, w6
+5:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget divuw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz w8, 1f
+    udiv w6, w6, w8
+    sxtw x6, w6
+    b 2f
+1:
+    mov x6, -1
+2:
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget remw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz w8, 3f
+    mov w9, 0x80000000
+    cmp w6, w9
+    b.ne 1f
+    cmn w8, 1
+    b.eq 2f
+1:
+    sdiv w9, w6, w8
+    msub w6, w9, w8, w6
+    b 3f
+2:
+    mov w6, wzr
+3:
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget remuw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cbz w8, 1f
+    udiv w9, w6, w8
+    msub w6, w9, w8, w6
+1:
     sxtw x6, w6
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
