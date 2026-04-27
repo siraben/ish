@@ -216,6 +216,20 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         gen(state, state->orig_ip + insn->length);
         return true;
     }
+    case RV_OP_SYSTEM:
+        if (insn->funct3 == 0 && insn->imm == 0) {
+            extern void gadget_rv_ecall(void);
+            gen(state, (unsigned long) gadget_rv_ecall);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        if (insn->funct3 == 0 && insn->imm == 1) {
+            extern void gadget_rv_ebreak(void);
+            gen(state, (unsigned long) gadget_rv_ebreak);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
     case RV_OP_LOAD:
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_lb(void); gadget = gadget_rv_lb; break; }

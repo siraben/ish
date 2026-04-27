@@ -293,6 +293,18 @@ NAME(fiber_exit):
     mov _tmp, INT_NONE
     b NAME(fiber_exit)
 
+.rv_gadget ecall
+    ldr x3, [_ip]
+    str x3, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_SYSCALL
+    b NAME(fiber_exit)
+
+.rv_gadget ebreak
+    ldr x3, [_ip]
+    str x3, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_BREAKPOINT
+    b NAME(fiber_exit)
+
 .rv_gadget lb
     ldr x10, [_ip]
     ldr x3, [_ip, 8]
