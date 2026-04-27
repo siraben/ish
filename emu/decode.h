@@ -804,16 +804,23 @@ restart:
         case 0x8d: TRACEI("lea\t\t"); READMODRM_MEM;
                    MOV(addr, modrm_reg,oz); break;
 
-        // we only support fs and gs, and that too not very well.
-        // gs does nothing: see comment in sys/tls.c
-        // for fs, we discard writes. if anyone tries to read we trap
+        // Only fs and gs have guest-visible state. The rest of the segment
+        // registers are flat in user mode, so reads return a harmless selector
+        // and writes are ignored.
         case 0x8c: TRACEI("mov seg, modrm\t"); READMODRM;
-            if (modrm.reg != 5 /* gs */) UNDEFINED;
-            MOV(gs, modrm_val,16); break;
+            if (modrm.reg == 5 /* gs */) {
+                MOV(gs, modrm_val,16); break;
+            } else if (modrm.reg <= 4 /* es/cs/ss/ds/fs */) {
+                imm = 0;
+                MOV(imm, modrm_val,16); break;
+            } else {
+                UNDEFINED;
+            }
         case 0x8e: TRACEI("mov modrm, seg\t"); READMODRM;
             if (modrm.reg == 5 /* gs */) {
                 MOV(modrm_val, gs,16); break;
-            } else if (modrm.reg == 4 /* fs */) {
+            } else if (modrm.reg == 0 /* es */ || modrm.reg == 2 /* ss */ ||
+                    modrm.reg == 3 /* ds */ || modrm.reg == 4 /* fs */) {
                 break;
             } else {
                 UNDEFINED;

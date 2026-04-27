@@ -1,0 +1,4 @@
+mov_ds ok
+pmullw ok
+seccomp ok
+cow ok

@@ -228,6 +228,7 @@ syscall_t syscall_table[] = {
     [345] = (syscall_t) sys_sendmmsg,
     [352] = (syscall_t) syscall_stub, // sched_getattr
     [353] = (syscall_t) sys_renameat2,
+    [354] = (syscall_t) sys_seccomp,
     [355] = (syscall_t) sys_getrandom,
     [359] = (syscall_t) sys_socket,
     [360] = (syscall_t) sys_socketpair,

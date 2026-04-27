@@ -3,12 +3,38 @@
 
 #define PRCTL_SET_KEEPCAPS_ 8
 #define PRCTL_SET_NAME_ 15
+#define PRCTL_SET_SECCOMP_ 22
+
+#define SECCOMP_SET_MODE_STRICT_ 0
+#define SECCOMP_SET_MODE_FILTER_ 1
+#define SECCOMP_FILTER_FLAG_NEW_LISTENER_ (1 << 3)
+
+static int_t seccomp_set_mode(dword_t mode, dword_t flags) {
+    switch (mode) {
+        case SECCOMP_SET_MODE_STRICT_: {
+            if (flags != 0)
+                return _EINVAL;
+            return 0;
+        }
+        case SECCOMP_SET_MODE_FILTER_:
+            if (flags & SECCOMP_FILTER_FLAG_NEW_LISTENER_)
+                return _EINVAL;
+            // iSH cannot enforce seccomp filters. Treat installation as a
+            // compatibility no-op so programs that self-sandbox can continue.
+            return 0;
+        default:
+            return _EINVAL;
+    }
+}
 
 int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(arg4), uint_t UNUSED(arg5)) {
     switch (option) {
         case PRCTL_SET_KEEPCAPS_:
             // stub
             return 0;
+        case PRCTL_SET_SECCOMP_:
+            STRACE("prctl(PR_SET_SECCOMP, %#x)", arg2);
+            return seccomp_set_mode(arg2, 0);
         case PRCTL_SET_NAME_: {
             char name[16];
             if (user_read_string(arg2, name, sizeof(name) - 1))
@@ -22,6 +48,11 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
             STRACE("prctl(%#x)", option);
             return _EINVAL;
     }
+}
+
+int_t sys_seccomp(dword_t op, dword_t flags, addr_t UNUSED(args)) {
+    STRACE("seccomp(%#x, %#x)", op, flags);
+    return seccomp_set_mode(op, flags);
 }
 
 int_t sys_arch_prctl(int_t code, addr_t addr) {
