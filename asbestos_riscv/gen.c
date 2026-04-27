@@ -161,9 +161,10 @@ static bool rv_ends_block(const struct rv_insn *insn) {
     case RV_OP_JAL:
     case RV_OP_JALR:
     case RV_OP_BRANCH:
-    case RV_OP_SYSTEM:
     case RV_OP_ILLEGAL:
         return true;
+    case RV_OP_SYSTEM:
+        return insn->funct3 == 0;
     default:
         return false;
     }
@@ -281,6 +282,14 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
             gen(state, insn->rs1);
             gen(state, insn->rs2);
             gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
+    case RV_OP_MISC_MEM:
+        if (insn->funct3 == 0 || insn->funct3 == 1) {
+            extern void gadget_rv_fence(void);
+            gen(state, (unsigned long) gadget_rv_fence);
             gen(state, state->orig_ip + insn->length);
             return true;
         }

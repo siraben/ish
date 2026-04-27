@@ -305,6 +305,9 @@ NAME(fiber_exit):
     mov _tmp, INT_BREAKPOINT
     b NAME(fiber_exit)
 
+.rv_gadget fence
+    rv_write_pc_and_continue 1
+
 .rv_gadget lb
     ldr x10, [_ip]
     ldr x3, [_ip, 8]

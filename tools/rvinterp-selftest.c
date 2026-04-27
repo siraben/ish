@@ -96,7 +96,9 @@ int main(void) {
     put32(&flat, pc + 52, rv_encode_i(8, 3, 3, 1, 0x07));      // fld ft1,8(gp)
     put32(&flat, pc + 56, rv_encode_r(0x01, 1, 0, 0, 2, 0x53)); // fadd.d ft2,ft0,ft1
     put32(&flat, pc + 60, rv_encode_s(16, 2, 3, 3, 0x27));     // fsd ft2,16(gp)
-    put32(&flat, pc + 64, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
+    put32(&flat, pc + 64, 0x0000000f);                         // fence
+    put32(&flat, pc + 68, 0x0000100f);                         // fence.i
+    put32(&flat, pc + 72, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
     put_double(&flat, 0x380, 1.25);
     put_double(&flat, 0x388, 2.5);
 
@@ -114,7 +116,7 @@ int main(void) {
     assert(cpu.a5 == UINT64_MAX);
     assert(cpu.a6 == UINT64_MAX);
     assert(cpu.a7 == 1);
-    assert(cpu.pc == pc + 68);
+    assert(cpu.pc == pc + 76);
     assert(get64(&flat, 0x300) == 15);
     assert(get_double(&flat, 0x390) == 3.75);
 
