@@ -2,7 +2,11 @@
 #define TASK_H
 
 #include <pthread.h>
+#if GUEST_RISCV64
+#include "emu_riscv/cpu.h"
+#else
 #include "emu/cpu.h"
+#endif
 #include "kernel/mm.h"
 #include "kernel/fs.h"
 #include "kernel/signal.h"
@@ -85,6 +89,10 @@ struct task {
     lock_t general_lock;
 
     struct task_sockrestart sockrestart;
+
+#if GUEST_RISCV64
+    bool force_child_clone_return;
+#endif
 
     // current condition/lock, so it can be notified in case of a signal
     cond_t *waiting_cond;
@@ -189,6 +197,7 @@ struct task *pid_get_task_zombie(dword_t id); // don't return null if the task e
 // TODO document
 void task_start(struct task *task);
 void task_run_current(void);
+pid_t_ task_current_pid(void);
 
 extern void (*exit_hook)(struct task *task, int code);
 

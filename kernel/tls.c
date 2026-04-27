@@ -13,6 +13,10 @@ struct user_desc {
 };
 
 int task_set_thread_area(struct task *task, addr_t u_info) {
+#if GUEST_RISCV64
+    task->cpu.tp = u_info;
+    return 0;
+#else
     struct user_desc info;
     if (user_get_task(task, u_info, info))
         return _EFAULT;
@@ -29,10 +33,15 @@ int task_set_thread_area(struct task *task, addr_t u_info) {
     if (user_put(u_info, info))
             return _EFAULT;
     return 0;
+#endif
 }
 
 int sys_set_thread_area(addr_t u_info) {
+#if GUEST_RISCV64
+    STRACE("set_thread_area(0x%llx)", (unsigned long long) u_info);
+#else
     STRACE("set_thread_area(0x%x)", u_info);
+#endif
     return task_set_thread_area(current, u_info);
 }
 

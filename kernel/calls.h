@@ -51,6 +51,7 @@ addr_t sys_brk(addr_t new_brk);
 #define MMAP_ANONYMOUS 0x20
 addr_t sys_mmap(addr_t args_addr);
 addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset);
+addr_t sys_mmap_riscv64(addr_t addr, qword_t len, qword_t prot, qword_t flags, qword_t fd_no, qword_t offset);
 int_t sys_munmap(addr_t addr, uint_t len);
 int_t sys_mprotect(addr_t addr, uint_t len, int_t prot);
 int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags);
@@ -256,6 +257,10 @@ dword_t sys_getrandom(addr_t buf_addr, dword_t len, dword_t flags);
 int_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
 int_t sys_ipc(uint_t call, int_t first, int_t second, int_t third, addr_t ptr, int_t fifth);
 
+#if GUEST_RISCV64
+typedef sqword_t (*syscall_t)(qword_t, qword_t, qword_t, qword_t, qword_t, qword_t);
+#else
 typedef int (*syscall_t)(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
+#endif
 
 #endif

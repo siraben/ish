@@ -136,6 +136,8 @@ noreturn void do_exit_group(int status) {
     // kill everyone else in the group
     struct task *task;
     list_for_each_entry(&group->threads, task, group_links) {
+        if (task == current)
+            continue;
         deliver_signal(task, SIGKILL_, SIGINFO_NIL);
         task->group->stopped = false;
         notify(&task->group->stopped_cond);

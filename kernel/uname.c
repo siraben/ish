@@ -22,9 +22,17 @@ void do_uname(struct uname *uts) {
     memset(uts, 0, sizeof(struct uname));
     strcpy(uts->system, "Linux");
     strcpy(uts->hostname, hostname);
+#if GUEST_RISCV64
+    strcpy(uts->release, "5.10.0-ish");
+#else
     strcpy(uts->release, "4.20.69-ish");
+#endif
     snprintf(uts->version, sizeof(uts->version), "%s %s %s", uname_version, __DATE__, __TIME__);
+#if GUEST_RISCV64
+    strcpy(uts->arch, "riscv64");
+#else
     strcpy(uts->arch, "i686");
+#endif
     strcpy(uts->domain, "(none)");
 }
 

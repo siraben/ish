@@ -396,8 +396,10 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     return err;
 }
 
-int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
-    STRACE("accept(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
+int_t sys_accept4(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr, int_t flags) {
+    STRACE("accept4(%d, 0x%x, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr, flags);
+    if (flags & ~(SOCK_NONBLOCK_|SOCK_CLOEXEC_))
+        return _EINVAL;
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -429,7 +431,7 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     }
 
     fd_t client_f = sock_fd_create(client,
-            sock->socket.domain, sock->socket.type, sock->socket.protocol);
+            sock->socket.domain, sock->socket.type | flags, sock->socket.protocol);
     if (client_f < 0)
         close(client);
 
@@ -448,6 +450,10 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     }
 
     return client_f;
+}
+
+int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
+    return sys_accept4(sock_fd, sockaddr_addr, sockaddr_len_addr, 0);
 }
 
 static void copy_unix_name(char *sockaddr, dword_t *sockaddr_len, struct fd *sock) {
@@ -1186,6 +1192,7 @@ const struct fd_ops socket_fdops = {
     .ioctl = realfs_ioctl,
 };
 
+#if !GUEST_RISCV64
 #if defined(__GNUC__) && __GNUC__ >= 8
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
@@ -1234,3 +1241,8 @@ int_t sys_socketcall(dword_t call_num, addr_t args_addr) {
         return _EFAULT;
     return call.func(args[0], args[1], args[2], args[3], args[4], args[5]);
 }
+#else
+int_t sys_socketcall(dword_t UNUSED(call_num), addr_t UNUSED(args_addr)) {
+    return _ENOSYS;
+}
+#endif

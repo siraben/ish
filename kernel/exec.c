@@ -27,11 +27,11 @@ struct exec_args {
     const char *args;
 };
 
-static inline dword_t align_stack(dword_t sp);
-static inline ssize_t user_strlen(dword_t p);
+static inline addr_t align_stack(addr_t sp);
+static inline ssize_t user_strlen(addr_t p);
 static inline int user_memset(addr_t start, byte_t val, dword_t len);
-static inline dword_t copy_string(dword_t sp, const char *string);
-static inline dword_t args_copy(dword_t sp, struct exec_args args);
+static inline addr_t copy_string(addr_t sp, const char *string);
+static inline addr_t args_copy(addr_t sp, struct exec_args args);
 static size_t args_size(struct exec_args args);
 
 static int read_header(struct fd *fd, struct elf_header *header) {
@@ -45,10 +45,15 @@ static int read_header(struct fd *fd, struct elf_header *header) {
     }
     if (memcmp(&header->magic, ELF_MAGIC, sizeof(header->magic)) != 0
             || (header->type != ELF_EXECUTABLE && header->type != ELF_DYNAMIC)
+#if GUEST_RISCV64
+            || header->bitness != ELF_64BIT
+            || header->machine != ELF_RISCV
+#else
             || header->bitness != ELF_32BIT
+            || header->machine != ELF_X86
+#endif
             || header->endian != ELF_LITTLEENDIAN
-            || header->elfversion1 != 1
-            || header->machine != ELF_X86)
+            || header->elfversion1 != 1)
         return _ENOEXEC;
     return 0;
 }
@@ -258,6 +263,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         entry = interp_base + interp_header.entry_point;
     }
 
+#if !GUEST_RISCV64
     // map vdso
     err = _ENOMEM;
     pages_t vdso_pages = sizeof(vdso_data) >> PAGE_BITS;
@@ -281,6 +287,10 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     if ((err = pt_map_nothing(current->mem, vvar_page, VVAR_PAGES, 0)) < 0)
         goto beyond_hope;
     mem_pt(current->mem, vvar_page)->data->name = "[vvar]";
+#else
+    addr_t vdso_entry = 0;
+    current->mm->vdso = 0;
+#endif
 
     // STACK TIME!
 
@@ -289,7 +299,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         goto beyond_hope;
     // that was the last memory mapping
     write_wrunlock(&current->mem->lock);
-    dword_t sp = 0xffffe000;
+    addr_t sp = 0xffffe000;
     // on 32-bit linux, there's 4 empty bytes at the very bottom of the stack.
     // on 64-bit linux, there's 8. make ptraceomatic happy. (a major theme in this file)
     sp -= sizeof(void *);
@@ -310,7 +320,11 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->mm->argv_start = sp;
     sp = align_stack(sp);
 
+#if GUEST_RISCV64
+    addr_t platform_addr = sp = copy_string(sp, "riscv64");
+#else
     addr_t platform_addr = sp = copy_string(sp, "i686");
+#endif
     if (sp == 0)
         goto beyond_hope;
     // 16 random bytes so no system call is needed to seed a userspace RNG
@@ -326,9 +340,15 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
     // declare elf aux now so we can know how big it is
     struct aux_ent aux[] = {
+#if !GUEST_RISCV64
         {AX_SYSINFO, vdso_entry},
+#endif
         {AX_SYSINFO_EHDR, current->mm->vdso},
-        {AX_HWCAP, 0x00000000}, // suck that
+#if GUEST_RISCV64
+        {AX_HWCAP, 0x112d},
+#else
+        {AX_HWCAP, 0x00000000},
+#endif
         {AX_PAGESZ, PAGE_SIZE},
         {AX_CLKTCK, 0x64},
         {AX_PHDR, load_addr + header.prghead_off},
@@ -343,12 +363,14 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         {AX_EGID, 0},
         {AX_SECURE, 0},
         {AX_RANDOM, random_addr},
+#if !GUEST_RISCV64
         {AX_HWCAP2, 0}, // suck that too
+#endif
         {AX_EXECFN, file_addr},
         {AX_PLATFORM, platform_addr},
         {0, 0}
     };
-    sp -= ((argv.count + 1) + (envp.count + 1) + 1) * sizeof(dword_t);
+    sp -= ((argv.count + 1) + (envp.count + 1) + 1) * sizeof(addr_t);
     sp -= sizeof(aux);
     sp &=~ 0xf;
 
@@ -358,7 +380,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // argc
     if (user_put(p, argv.count))
         return _EFAULT;
-    p += sizeof(dword_t);
+    p += sizeof(addr_t);
 
     // argv
     size_t argc = argv.count;
@@ -366,9 +388,9 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         if (user_put(p, argv_addr))
             return _EFAULT;
         argv_addr += user_strlen(argv_addr) + 1;
-        p += sizeof(dword_t); // null terminator
+        p += sizeof(addr_t); // null terminator
     }
-    p += sizeof(dword_t); // null terminator
+    p += sizeof(addr_t); // null terminator
 
     // envp
     size_t envc = envp.count;
@@ -376,9 +398,9 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         if (user_put(p, envp_addr))
             return _EFAULT;
         envp_addr += user_strlen(envp_addr) + 1;
-        p += sizeof(dword_t);
+        p += sizeof(addr_t);
     }
-    p += sizeof(dword_t); // null terminator
+    p += sizeof(addr_t); // null terminator
 
     // copy auxv
     current->mm->auxv_start = p;
@@ -388,6 +410,24 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->mm->auxv_end = p;
 
     current->mm->stack_start = sp;
+#if GUEST_RISCV64
+    current->cpu.sp = sp;
+    current->cpu.pc = entry;
+    current->cpu.x[0] = 0;
+    current->cpu.ra = 0;
+    current->cpu.gp = 0;
+    current->cpu.tp = 0;
+    current->cpu.a0 = 0;
+    current->cpu.a1 = 0;
+    current->cpu.a2 = 0;
+    current->cpu.a3 = 0;
+    current->cpu.a4 = 0;
+    current->cpu.a5 = 0;
+    current->cpu.a6 = 0;
+    current->cpu.a7 = 0;
+    current->cpu.fcsr = 0;
+    current->cpu.reservation_valid = false;
+#else
     current->cpu.esp = sp;
     current->cpu.eip = entry;
     current->cpu.fcw = 0x37f;
@@ -405,6 +445,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->cpu.ebp = 0;
     collapse_flags(&current->cpu);
     current->cpu.eflags = 0;
+#endif
 
     err = 0;
 out_free_interp:
@@ -435,18 +476,18 @@ static size_t args_size(struct exec_args args) {
     return args_end - args.args;
 }
 
-static inline dword_t align_stack(addr_t sp) {
+static inline addr_t align_stack(addr_t sp) {
     return sp &~ 0xf;
 }
 
-static inline dword_t copy_string(addr_t sp, const char *string) {
+static inline addr_t copy_string(addr_t sp, const char *string) {
     sp -= strlen(string) + 1;
     if (user_write_string(sp, string))
         return 0;
     return sp;
 }
 
-static inline dword_t args_copy(addr_t sp, struct exec_args args) {
+static inline addr_t args_copy(addr_t sp, struct exec_args args) {
     size_t size = args_size(args);
     sp -= size;
     if (user_write(sp, args.args, size))

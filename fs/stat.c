@@ -8,7 +8,29 @@
 #include "fs/fd.h"
 #include "fs/path.h"
 
-struct newstat64 stat_convert_newstat64(struct statbuf stat) {
+#if GUEST_RISCV64
+static struct rv64_stat stat_convert_rv64(struct statbuf stat) {
+    struct rv64_stat rvstat = {};
+    rvstat.dev = stat.dev;
+    rvstat.ino = stat.inode;
+    rvstat.mode = stat.mode;
+    rvstat.nlink = stat.nlink;
+    rvstat.uid = stat.uid;
+    rvstat.gid = stat.gid;
+    rvstat.rdev = stat.rdev;
+    rvstat.size = stat.size;
+    rvstat.blksize = stat.blksize;
+    rvstat.blocks = stat.blocks;
+    rvstat.atime = stat.atime;
+    rvstat.atime_nsec = stat.atime_nsec;
+    rvstat.mtime = stat.mtime;
+    rvstat.mtime_nsec = stat.mtime_nsec;
+    rvstat.ctime = stat.ctime;
+    rvstat.ctime_nsec = stat.ctime_nsec;
+    return rvstat;
+}
+#else
+static struct newstat64 stat_convert_newstat64(struct statbuf stat) {
     struct newstat64 newstat;
     newstat.dev = stat.dev;
     newstat.fucked_ino = stat.inode;
@@ -28,6 +50,17 @@ struct newstat64 stat_convert_newstat64(struct statbuf stat) {
     newstat.ctime = stat.ctime;
     newstat.ctime_nsec = stat.ctime_nsec;
     return newstat;
+}
+#endif
+
+static int user_put_stat(addr_t statbuf_addr, struct statbuf stat) {
+#if GUEST_RISCV64
+    struct rv64_stat rvstat = stat_convert_rv64(stat);
+    return user_put(statbuf_addr, rvstat);
+#else
+    struct newstat64 newstat = stat_convert_newstat64(stat);
+    return user_put(statbuf_addr, newstat);
+#endif
 }
 
 int generic_statat(struct fd *at, const char *path_raw, struct statbuf *stat, bool follow_links) {
@@ -61,8 +94,7 @@ static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, b
     struct statbuf stat = {};
     if ((err = generic_statat(at, path, &stat, follow_links)) < 0)
         return err;
-    struct newstat64 newstat = stat_convert_newstat64(stat);
-    if (user_put(statbuf_addr, newstat))
+    if (user_put_stat(statbuf_addr, stat))
         return _EFAULT;
     return 0;
 }
@@ -88,8 +120,7 @@ dword_t sys_fstat64(fd_t fd_no, addr_t statbuf_addr) {
     int err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0)
         return err;
-    struct newstat64 newstat = stat_convert_newstat64(stat);
-    if (user_put(statbuf_addr, newstat))
+    if (user_put_stat(statbuf_addr, stat))
         return _EFAULT;
     return 0;
 }
