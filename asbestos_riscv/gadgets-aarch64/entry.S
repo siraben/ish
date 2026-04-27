@@ -188,7 +188,7 @@
     add x12, x15, x12
 .endm
 
-.macro rv_load_slow funct3, id
+.macro rv_load_slow funct3, id, param_count=4
 .Lrv_slow_load_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
@@ -204,10 +204,10 @@
     rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
-    rv_write_pc_and_continue 4
+    rv_write_pc_and_continue \param_count
 .endm
 
-.macro rv_store_slow funct3, id
+.macro rv_store_slow funct3, id, param_count=4
 .Lrv_slow_store_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
@@ -223,7 +223,7 @@
     rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
-    rv_write_pc_and_continue 4
+    rv_write_pc_and_continue \param_count
 .endm
 
 .macro rv_fload_slow funct3, id
@@ -540,6 +540,16 @@ NAME(fiber_exit):
     rv_write_pc_and_continue 4
     rv_load_slow 2, lw
 
+.rv_gadget lw_sp
+    ldr x10, [_ip]
+    ldr x4, [_ip, 8]
+    add x12, rv_sp, x4
+    rv_tlb_read_prep 4, lw_sp
+    ldrsw x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 3
+    rv_load_slow 2, lw_sp, 3
+
 .rv_gadget ld
     ldr x10, [_ip]
     ldr x3, [_ip, 8]
@@ -551,6 +561,16 @@ NAME(fiber_exit):
     rv_store_x x6, x10
     rv_write_pc_and_continue 4
     rv_load_slow 3, ld
+
+.rv_gadget ld_sp
+    ldr x10, [_ip]
+    ldr x4, [_ip, 8]
+    add x12, rv_sp, x4
+    rv_tlb_read_prep 8, ld_sp
+    ldr x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 3
+    rv_load_slow 3, ld_sp, 3
 
 .rv_gadget lbu
     ldr x10, [_ip]
@@ -650,6 +670,16 @@ NAME(fiber_exit):
     rv_write_pc_and_continue 4
     rv_store_slow 2, sw
 
+.rv_gadget sw_sp
+    ldr x4, [_ip]
+    ldr x5, [_ip, 8]
+    add x12, rv_sp, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 4, sw_sp
+    str w6, [x12]
+    rv_write_pc_and_continue 3
+    rv_store_slow 2, sw_sp, 3
+
 .rv_gadget sd
     ldr x3, [_ip]
     ldr x4, [_ip, 8]
@@ -661,6 +691,16 @@ NAME(fiber_exit):
     str x6, [x12]
     rv_write_pc_and_continue 4
     rv_store_slow 3, sd
+
+.rv_gadget sd_sp
+    ldr x4, [_ip]
+    ldr x5, [_ip, 8]
+    add x12, rv_sp, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 8, sd_sp
+    str x6, [x12]
+    rv_write_pc_and_continue 3
+    rv_store_slow 3, sd_sp, 3
 
 .rv_gadget fsw
     ldr x3, [_ip]
@@ -708,6 +748,11 @@ NAME(fiber_exit):
     add x6, x6, x5
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
+
+.rv_gadget addi_sp
+    ldr x5, [_ip]
+    add rv_sp, rv_sp, x5
+    rv_write_pc_and_continue 2
 
 .rv_gadget andi
     ldr x3, [_ip]

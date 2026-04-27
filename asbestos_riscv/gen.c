@@ -581,6 +581,15 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         }
         break;
     case RV_OP_LOAD:
+        if (insn->rs1 == 2 && (insn->funct3 == 2 || insn->funct3 == 3)) {
+            extern void gadget_rv_lw_sp(void);
+            extern void gadget_rv_ld_sp(void);
+            gen(state, (unsigned long) (insn->funct3 == 2 ? gadget_rv_lw_sp : gadget_rv_ld_sp));
+            gen(state, insn->rd);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_lb(void); gadget = gadget_rv_lb; break; }
         case 1: { extern void gadget_rv_lh(void); gadget = gadget_rv_lh; break; }
@@ -595,6 +604,15 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
             goto gen_imm;
         break;
     case RV_OP_STORE:
+        if (insn->rs1 == 2 && (insn->funct3 == 2 || insn->funct3 == 3)) {
+            extern void gadget_rv_sw_sp(void);
+            extern void gadget_rv_sd_sp(void);
+            gen(state, (unsigned long) (insn->funct3 == 2 ? gadget_rv_sw_sp : gadget_rv_sd_sp));
+            gen(state, insn->rs2);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_sb(void); gadget = gadget_rv_sb; break; }
         case 1: { extern void gadget_rv_sh(void); gadget = gadget_rv_sh; break; }
@@ -657,6 +675,13 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         }
         break;
     case RV_OP_OP_IMM:
+        if (insn->funct3 == 0 && insn->rd == 2 && insn->rs1 == 2) {
+            extern void gadget_rv_addi_sp(void);
+            gen(state, (unsigned long) gadget_rv_addi_sp);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_addi(void); gadget = gadget_rv_addi; break; }
         case 1: { extern void gadget_rv_slli(void); gadget = gadget_rv_slli; break; }
