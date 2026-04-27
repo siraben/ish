@@ -26,23 +26,18 @@ _tlb .req x2
 _addr .req x3
 _ip .req x28
 
-# Hot RV registers pinned in host registers.
-rv_ra .req x20
-rv_sp .req x21
-rv_gp .req x22
-rv_tp .req x23
-rv_t0 .req x24
-rv_t1 .req x25
-rv_t2 .req x26
-rv_s0 .req x27
-rv_a0 .req x8
-rv_a1 .req x9
-rv_a2 .req x10
-rv_a3 .req x11
-rv_a4 .req x12
-rv_a5 .req x13
-rv_a6 .req x14
-rv_a7 .req x15
+# Hot RV registers pinned in callee-saved host registers. x8-x15 remain
+# scratch registers in the existing RV64 gadget ABI, so the a-registers stay
+# memory-backed until the scratch convention is widened.
+rv_ra .req x19
+rv_sp .req x20
+rv_gp .req x21
+rv_tp .req x22
+rv_t0 .req x23
+rv_t1 .req x24
+rv_t2 .req x25
+rv_s0 .req x26
+rv_s1 .req x27
 
 .macro .rv_gadget name
     .global NAME(gadget_rv_\()\name)
@@ -57,9 +52,19 @@ rv_a7 .req x15
 .endm
 
 .macro rv_load_hot_regs
+    ldp rv_ra, rv_sp, [_cpu, 24]
+    ldp rv_gp, rv_tp, [_cpu, 40]
+    ldp rv_t0, rv_t1, [_cpu, 56]
+    ldp rv_t2, rv_s0, [_cpu, 72]
+    ldr rv_s1, [_cpu, 88]
 .endm
 
 .macro rv_save_hot_regs
+    stp rv_ra, rv_sp, [_cpu, 24]
+    stp rv_gp, rv_tp, [_cpu, 40]
+    stp rv_t0, rv_t1, [_cpu, 56]
+    stp rv_t2, rv_s0, [_cpu, 72]
+    str rv_s1, [_cpu, 88]
 .endm
 
 # vim: ft=gas

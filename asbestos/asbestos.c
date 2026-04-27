@@ -220,7 +220,11 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             if (!last_block->is_jetsam && !block->is_jetsam) {
                 for (int i = 0; i <= 1; i++) {
                     if (last_block->jump_ip[i] != NULL &&
+#if GUEST_RISCV64
+                            (*last_block->jump_ip[i] & ~(1ul << 63)) == block->addr) {
+#else
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
+#endif
                         *last_block->jump_ip[i] = (unsigned long) block->code;
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
                     }

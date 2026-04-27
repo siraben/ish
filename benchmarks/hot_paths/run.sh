@@ -101,6 +101,9 @@ prime_sieve	-	self	/tmp/bench-hot-paths/bin/prime_sieve
 mandelbrot	-	self	/tmp/bench-hot-paths/bin/mandelbrot
 file_io	-	self	/tmp/bench-hot-paths/bin/file_io
 pipe_throughput	-	self	/tmp/bench-hot-paths/bin/pipe_throughput
+branch_chaining	-	self	/tmp/bench-hot-paths/bin/branch_chaining
+call_return	-	self	/tmp/bench-hot-paths/bin/call_return
+hot_regs	-	self	/tmp/bench-hot-paths/bin/hot_regs
 gzip_payload	-	time	/bin/sh /tmp/bench-hot-paths/guest/gzip_payload.sh
 python_startup	/usr/bin/python3	time	/usr/bin/python3 -S -c "pass"
 python_compute	/usr/bin/python3	time	/usr/bin/python3 /tmp/bench-hot-paths/guest/python_compute.py

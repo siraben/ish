@@ -459,10 +459,15 @@ void gen_exit(struct gen_state *state) {
 
 void gen_end(struct gen_state *state) {
     struct fiber_block *block = state->block;
-    block->jump_ip[0] = NULL;
-    block->jump_ip[1] = NULL;
-    block->old_jump_ip[0] = 0;
-    block->old_jump_ip[1] = 0;
+    for (int i = 0; i <= 1; i++) {
+    if (state->jump_ip[i] != 0) {
+            block->jump_ip[i] = &block->code[state->jump_ip[i]];
+            block->old_jump_ip[i] = *block->jump_ip[i];
+        } else {
+            block->jump_ip[i] = NULL;
+            block->old_jump_ip[i] = 0;
+        }
+    }
     list_init(&block->jumps_from[0]);
     list_init(&block->jumps_from[1]);
     list_init(&block->jumps_from_links[0]);
@@ -472,6 +477,8 @@ void gen_end(struct gen_state *state) {
     list_init(&block->page[1]);
     list_init(&block->jetsam);
     block->is_jetsam = false;
+    if (state->block_patch_ip != 0)
+        block->code[state->block_patch_ip] = (unsigned long) block;
     block->end_addr = block->addr == state->ip ? block->addr : state->ip - 1;
 }
 
@@ -491,6 +498,7 @@ static bool rv_ends_block(const struct rv_insn *insn) {
 
 static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
     void (*gadget)(void) = NULL;
+    unsigned long fake_ip = state->orig_ip | (1ul << 63);
     switch (insn->op) {
     case RV_OP_LUI: {
         extern void gadget_rv_lui(void);
@@ -514,10 +522,20 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         gen(state, (unsigned long) gadget_rv_jal);
         gen(state, insn->rd);
         gen(state, state->orig_ip + insn->length);
-        gen(state, state->orig_ip + insn->imm);
+        gen(state, 0);
+        state->block_patch_ip = state->size - 1;
+        gen(state, fake_ip + insn->length);
+        gen(state, fake_ip + insn->imm);
+        state->jump_ip[0] = state->size - 2;
+        state->jump_ip[1] = state->size - 1;
         return true;
     }
     case RV_OP_JALR: {
+        if (insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) {
+            extern void gadget_rv_ret(void);
+            gen(state, (unsigned long) gadget_rv_ret);
+            return true;
+        }
         extern void gadget_rv_jalr(void);
         gen(state, (unsigned long) gadget_rv_jalr);
         gen(state, insn->rd);
@@ -532,8 +550,10 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         gen(state, insn->funct3);
         gen(state, insn->rs1);
         gen(state, insn->rs2);
-        gen(state, state->orig_ip + insn->imm);
-        gen(state, state->orig_ip + insn->length);
+        gen(state, fake_ip + insn->imm);
+        gen(state, fake_ip + insn->length);
+        state->jump_ip[0] = state->size - 2;
+        state->jump_ip[1] = state->size - 1;
         return true;
     }
     case RV_OP_SYSTEM:

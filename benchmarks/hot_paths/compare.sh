@@ -45,7 +45,7 @@ compile_c_benchmarks() {
     target=$1
     out=$2
     mkdir -p "$out"
-    for bench in prime_sieve mandelbrot file_io pipe_throughput; do
+    for bench in prime_sieve mandelbrot file_io pipe_throughput branch_chaining call_return hot_regs; do
         "$CLANG" --target="$target" -O2 -nostdlib -static -fuse-ld=lld \
             "$ROOT/benchmarks/hot_paths/cbench/start.c" \
             "$ROOT/benchmarks/hot_paths/cbench/$bench.c" \

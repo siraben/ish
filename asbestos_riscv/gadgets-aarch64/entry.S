@@ -6,6 +6,8 @@
 .equ RV_CPU_pc, 272
 .equ RV_CPU_f, 280
 .equ RV_FIBER_BLOCK_code, 192
+.equ RV_FIBER_FRAME_last_block, 624
+.equ RV_FIBER_FRAME_ret_cache, 632
 .equ RV_TLB_dirty_page, 8
 .equ RV_TLB_entries, 32
 .equ RV_TLB_ENTRY_page, 0
@@ -19,20 +21,114 @@
 .endm
 
 .macro rv_load_x dst, reg
-    cbz \reg, 1f
+    cbz \reg, .Lrv_load_zero_\@
+    cmp \reg, 9
+    b.hi .Lrv_load_memory_\@
+    cmp \reg, 1
+    b.ne .Lrv_load_not_ra_\@
+    mov \dst, rv_ra
+    b .Lrv_load_done_\@
+.Lrv_load_not_ra_\@:
+    cmp \reg, 2
+    b.ne .Lrv_load_not_sp_\@
+    mov \dst, rv_sp
+    b .Lrv_load_done_\@
+.Lrv_load_not_sp_\@:
+    cmp \reg, 3
+    b.ne .Lrv_load_not_gp_\@
+    mov \dst, rv_gp
+    b .Lrv_load_done_\@
+.Lrv_load_not_gp_\@:
+    cmp \reg, 4
+    b.ne .Lrv_load_not_tp_\@
+    mov \dst, rv_tp
+    b .Lrv_load_done_\@
+.Lrv_load_not_tp_\@:
+    cmp \reg, 5
+    b.ne .Lrv_load_not_t0_\@
+    mov \dst, rv_t0
+    b .Lrv_load_done_\@
+.Lrv_load_not_t0_\@:
+    cmp \reg, 6
+    b.ne .Lrv_load_not_t1_\@
+    mov \dst, rv_t1
+    b .Lrv_load_done_\@
+.Lrv_load_not_t1_\@:
+    cmp \reg, 7
+    b.ne .Lrv_load_not_t2_\@
+    mov \dst, rv_t2
+    b .Lrv_load_done_\@
+.Lrv_load_not_t2_\@:
+    cmp \reg, 8
+    b.ne .Lrv_load_not_s0_\@
+    mov \dst, rv_s0
+    b .Lrv_load_done_\@
+.Lrv_load_not_s0_\@:
+    cmp \reg, 9
+    b.ne .Lrv_load_memory_\@
+    mov \dst, rv_s1
+    b .Lrv_load_done_\@
+.Lrv_load_memory_\@:
     add x7, _cpu, 16
     ldr \dst, [x7, \reg, lsl 3]
-    b 2f
-1:
+    b .Lrv_load_done_\@
+.Lrv_load_zero_\@:
     mov \dst, xzr
-2:
+.Lrv_load_done_\@:
 .endm
 
 .macro rv_store_x src, reg
-    cbz \reg, 1f
+    cbz \reg, .Lrv_store_done_\@
+    cmp \reg, 9
+    b.hi .Lrv_store_memory_\@
+    cmp \reg, 1
+    b.ne .Lrv_store_not_ra_\@
+    mov rv_ra, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_ra_\@:
+    cmp \reg, 2
+    b.ne .Lrv_store_not_sp_\@
+    mov rv_sp, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_sp_\@:
+    cmp \reg, 3
+    b.ne .Lrv_store_not_gp_\@
+    mov rv_gp, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_gp_\@:
+    cmp \reg, 4
+    b.ne .Lrv_store_not_tp_\@
+    mov rv_tp, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_tp_\@:
+    cmp \reg, 5
+    b.ne .Lrv_store_not_t0_\@
+    mov rv_t0, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_t0_\@:
+    cmp \reg, 6
+    b.ne .Lrv_store_not_t1_\@
+    mov rv_t1, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_t1_\@:
+    cmp \reg, 7
+    b.ne .Lrv_store_not_t2_\@
+    mov rv_t2, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_t2_\@:
+    cmp \reg, 8
+    b.ne .Lrv_store_not_s0_\@
+    mov rv_s0, \src
+    b .Lrv_store_done_\@
+.Lrv_store_not_s0_\@:
+    cmp \reg, 9
+    b.ne .Lrv_store_memory_\@
+    mov rv_s1, \src
+    b .Lrv_store_done_\@
+.Lrv_store_memory_\@:
     add x7, _cpu, 16
     str \src, [x7, \reg, lsl 3]
-1:
+.Lrv_store_done_\@:
 .endm
 
 .macro rv_load_f dst, reg
@@ -96,6 +192,7 @@
 .Lrv_slow_load_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     mov x2, x12
@@ -104,6 +201,7 @@
     bl NAME(rv_gadget_load_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
@@ -113,6 +211,7 @@
 .Lrv_slow_store_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     mov x2, x12
@@ -121,6 +220,7 @@
     bl NAME(rv_gadget_store_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
@@ -130,6 +230,7 @@
 .Lrv_slow_load_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     mov x2, x12
@@ -138,6 +239,7 @@
     bl NAME(rv_gadget_fload_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
@@ -147,6 +249,7 @@
 .Lrv_slow_store_\id:
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     mov x2, x12
@@ -155,6 +258,7 @@
     bl NAME(rv_gadget_fstore_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
@@ -182,6 +286,15 @@ NAME(fiber_ret):
 
 .global NAME(fiber_ret_chain)
 NAME(fiber_ret_chain):
+    tbz _ip, 63, 1f
+    lsl x3, _ip, 1
+    lsr x3, x3, 1
+    str x3, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_NONE
+    b NAME(fiber_exit)
+1:
+    sub x3, _ip, RV_FIBER_BLOCK_code
+    str x3, [_cpu, RV_FIBER_FRAME_last_block]
     rv_gret
 
 .global NAME(fiber_exit)
@@ -207,12 +320,14 @@ NAME(fiber_exit):
     stp x1, x2, [sp, -0x30]!
     stp x3, x4, [sp, 0x10]
     str lr, [sp, 0x20]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     bl NAME(rv_exec_one_gadget)
     ldr lr, [sp, 0x20]
     ldp x3, x4, [sp, 0x10]
     ldp x1, x2, [sp], 0x30
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     ldr x3, [_ip]
@@ -225,8 +340,8 @@ NAME(fiber_exit):
     ldr x3, [_ip]      /* funct3 */
     ldr x4, [_ip, 8]  /* rs1 */
     ldr x5, [_ip, 16] /* rs2 */
-    ldr x9, [_ip, 24] /* target pc */
-    ldr x10, [_ip, 32] /* fallthrough pc */
+    ldr x9, [_ip, 24] /* target block pointer or tagged pc */
+    ldr x10, [_ip, 32] /* fallthrough block pointer or tagged pc */
     rv_load_x x6, x4
     rv_load_x x8, x5
     cmp x3, 0
@@ -267,16 +382,47 @@ NAME(fiber_exit):
     cmp x6, x8
     csel x11, x9, x10, hs
 7:
-    str x11, [_cpu, RV_CPU_pc]
-    mov _tmp, INT_NONE
-    b NAME(fiber_exit)
+    mov _ip, x11
+    b NAME(fiber_ret_chain)
 
 .rv_gadget jal
     ldr x3, [_ip]      /* rd */
     ldr x4, [_ip, 8]  /* return pc */
-    ldr x5, [_ip, 16] /* target pc */
+    ldr x5, [_ip, 32] /* target block pointer or tagged pc */
     rv_store_x x4, x3
-    str x5, [_cpu, RV_CPU_pc]
+    cmp x3, 1
+    b.eq 1f
+    cmp x3, 5
+    b.ne 2f
+1:
+    ubfx x6, x4, 4, 12
+    add x7, _cpu, RV_FIBER_FRAME_ret_cache
+    str _ip, [x7, x6, lsl 3]
+2:
+    mov _ip, x5
+    b NAME(fiber_ret_chain)
+
+.rv_gadget ret
+    mov x8, rv_ra
+    bic x8, x8, 1
+    ubfx x9, x8, 4, 12
+    add x7, _cpu, RV_FIBER_FRAME_ret_cache
+    ldr x10, [x7, x9, lsl 3]
+    cbz x10, 3f
+    ldr x11, [x10, 8]
+    cmp x8, x11
+    b.ne 3f
+    ldr _ip, [x10, 24]
+    tbz _ip, 63, 1f
+    ldr x11, [x10, 16]
+    str x11, [_cpu, RV_FIBER_FRAME_last_block]
+    str x8, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_NONE
+    b NAME(fiber_exit)
+1:
+    b NAME(fiber_ret_chain)
+3:
+    str x8, [_cpu, RV_CPU_pc]
     mov _tmp, INT_NONE
     b NAME(fiber_exit)
 
@@ -311,6 +457,7 @@ NAME(fiber_exit):
 .rv_gadget csr
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     ldr x1, [_ip]
     ldr x2, [_ip, 8]
@@ -319,6 +466,7 @@ NAME(fiber_exit):
     bl NAME(rv_gadget_csr)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 5
@@ -326,6 +474,7 @@ NAME(fiber_exit):
 .rv_gadget amo
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _tlb
     ldr x2, [_ip]
@@ -336,6 +485,7 @@ NAME(fiber_exit):
     bl NAME(rv_gadget_amo)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 6
@@ -343,11 +493,13 @@ NAME(fiber_exit):
 .rv_gadget fp
     stp x1, x2, [sp, -0x20]!
     str lr, [sp, 0x10]
+    rv_save_hot_regs
     mov x0, _cpu
     mov x1, _ip
     bl NAME(rv_gadget_fp)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
+    rv_load_hot_regs
     cmp w0, INT_NONE
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 9
