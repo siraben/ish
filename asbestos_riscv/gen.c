@@ -56,6 +56,49 @@ int rv_gadget_store_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, un
     return INT_NONE;
 }
 
+int rv_gadget_fload_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, unsigned funct3, unsigned rd) {
+    if (funct3 == 2) {
+        uint32_t value;
+        if (!tlb_read(tlb, addr, &value, sizeof(value))) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = false;
+            return INT_GPF;
+        }
+        cpu->f[rd] = UINT64_C(0xffffffff00000000) | value;
+        return INT_NONE;
+    }
+    if (funct3 == 3) {
+        if (!tlb_read(tlb, addr, &cpu->f[rd], sizeof(uint64_t))) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = false;
+            return INT_GPF;
+        }
+        return INT_NONE;
+    }
+    return INT_UNDEFINED;
+}
+
+int rv_gadget_fstore_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, unsigned funct3, uint64_t value) {
+    if (funct3 == 2) {
+        uint32_t narrow = value;
+        if (!tlb_write(tlb, addr, &narrow, sizeof(narrow))) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = true;
+            return INT_GPF;
+        }
+        return INT_NONE;
+    }
+    if (funct3 == 3) {
+        if (!tlb_write(tlb, addr, &value, sizeof(value))) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = true;
+            return INT_GPF;
+        }
+        return INT_NONE;
+    }
+    return INT_UNDEFINED;
+}
+
 enum rv_block_marker {
     RV_BLOCK_INSN = 0x52564900u,
     RV_BLOCK_EXIT = 0x525649ffu,
@@ -193,6 +236,30 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         case 1: { extern void gadget_rv_sh(void); gadget = gadget_rv_sh; break; }
         case 2: { extern void gadget_rv_sw(void); gadget = gadget_rv_sw; break; }
         case 3: { extern void gadget_rv_sd(void); gadget = gadget_rv_sd; break; }
+        default: break;
+        }
+        if (gadget != NULL) {
+            gen(state, (unsigned long) gadget);
+            gen(state, insn->rs1);
+            gen(state, insn->rs2);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
+    case RV_OP_LOAD_FP:
+        switch (insn->funct3) {
+        case 2: { extern void gadget_rv_flw(void); gadget = gadget_rv_flw; break; }
+        case 3: { extern void gadget_rv_fld(void); gadget = gadget_rv_fld; break; }
+        default: break;
+        }
+        if (gadget != NULL)
+            goto gen_imm;
+        break;
+    case RV_OP_STORE_FP:
+        switch (insn->funct3) {
+        case 2: { extern void gadget_rv_fsw(void); gadget = gadget_rv_fsw; break; }
+        case 3: { extern void gadget_rv_fsd(void); gadget = gadget_rv_fsd; break; }
         default: break;
         }
         if (gadget != NULL) {

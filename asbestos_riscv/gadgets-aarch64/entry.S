@@ -4,6 +4,7 @@
 # Hard-coded until asbestos_riscv grows its own generated offsets file.
 # Keep in sync with emu_riscv/cpu.h: pc aliases eip after mmu, cycle, x[32].
 .equ RV_CPU_pc, 272
+.equ RV_CPU_f, 280
 .equ RV_FIBER_BLOCK_code, 192
 .equ RV_TLB_dirty_page, 8
 .equ RV_TLB_entries, 32
@@ -32,6 +33,16 @@
     add x7, _cpu, 16
     str \src, [x7, \reg, lsl 3]
 1:
+.endm
+
+.macro rv_load_f dst, reg
+    add x7, _cpu, RV_CPU_f
+    ldr \dst, [x7, \reg, lsl 3]
+.endm
+
+.macro rv_store_f src, reg
+    add x7, _cpu, RV_CPU_f
+    str \src, [x7, \reg, lsl 3]
 .endm
 
 .macro rv_tlb_index_and_page
@@ -108,6 +119,40 @@
     mov w3, \funct3
     mov x4, x6
     bl NAME(rv_gadget_store_slow)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    rv_write_pc_and_continue 4
+.endm
+
+.macro rv_fload_slow funct3, id
+.Lrv_slow_load_\id:
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _tlb
+    mov x2, x12
+    mov w3, \funct3
+    mov w4, w10
+    bl NAME(rv_gadget_fload_slow)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    rv_write_pc_and_continue 4
+.endm
+
+.macro rv_fstore_slow funct3, id
+.Lrv_slow_store_\id:
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _tlb
+    mov x2, x12
+    mov w3, \funct3
+    mov x4, x6
+    bl NAME(rv_gadget_fstore_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
     cmp w0, INT_NONE
@@ -332,6 +377,32 @@ NAME(fiber_exit):
     rv_write_pc_and_continue 4
     rv_load_slow 6, lwu
 
+.rv_gadget flw
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 4, flw
+    ldr w6, [x12]
+    mov x8, -1
+    bfi x8, x6, 0, 32
+    rv_store_f x8, x10
+    rv_write_pc_and_continue 4
+    rv_fload_slow 2, flw
+
+.rv_gadget fld
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 8, fld
+    ldr x6, [x12]
+    rv_store_f x6, x10
+    rv_write_pc_and_continue 4
+    rv_fload_slow 3, fld
+
 .rv_gadget sb
     ldr x3, [_ip]
     ldr x4, [_ip, 8]
@@ -379,6 +450,30 @@ NAME(fiber_exit):
     str x6, [x12]
     rv_write_pc_and_continue 4
     rv_store_slow 3, sd
+
+.rv_gadget fsw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_f x6, x4
+    rv_tlb_write_prep 4, fsw
+    str w6, [x12]
+    rv_write_pc_and_continue 4
+    rv_fstore_slow 2, fsw
+
+.rv_gadget fsd
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_f x6, x4
+    rv_tlb_write_prep 8, fsd
+    str x6, [x12]
+    rv_write_pc_and_continue 4
+    rv_fstore_slow 3, fsd
 
 .rv_gadget lui
     ldr x3, [_ip]      /* rd */
