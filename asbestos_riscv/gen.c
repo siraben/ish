@@ -4,6 +4,7 @@
 #include "asbestos_riscv/gen.h"
 #include "debug.h"
 #include "emu_riscv/decode.h"
+#include "emu/interrupt.h"
 
 enum rv_block_marker {
     RV_BLOCK_INSN = 0x52564900u,
@@ -40,8 +41,8 @@ void gen_start(addr_t addr, struct gen_state *state) {
 }
 
 void gen_exit(struct gen_state *state) {
-    gen(state, RV_BLOCK_EXIT);
-    gen(state, state->ip);
+    extern void gadget_rv_exit(void);
+    gen(state, (unsigned long) gadget_rv_exit);
 }
 
 void gen_end(struct gen_state *state) {
@@ -81,8 +82,9 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     state->orig_ip_extra = 0;
 
     if (!tlb_read(tlb, state->ip, bytes, sizeof(uint16_t))) {
-        gen(state, RV_BLOCK_EXIT);
-        gen(state, tlb->segfault_addr);
+        extern void gadget_rv_interrupt(void);
+        gen(state, (unsigned long) gadget_rv_interrupt);
+        gen(state, INT_GPF);
         return false;
     }
 
@@ -90,22 +92,22 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     size_t length = (h & 3) == 3 ? sizeof(uint32_t) : sizeof(uint16_t);
     if (length == sizeof(uint32_t) &&
             !tlb_read(tlb, state->ip + sizeof(uint16_t), bytes + sizeof(uint16_t), sizeof(uint16_t))) {
-        gen(state, RV_BLOCK_EXIT);
-        gen(state, tlb->segfault_addr);
+        extern void gadget_rv_interrupt(void);
+        gen(state, (unsigned long) gadget_rv_interrupt);
+        gen(state, INT_GPF);
         return false;
     }
 
     struct rv_insn insn;
     bool decoded = rv_decode(bytes, length, &insn);
 
-    // Until Phase 2 supplies real ARM64 gadgets, keep a compact decoded stream
-    // in fiber_block::code. This makes generator tests and future gadget
-    // lowering deterministic without pretending the block is executable.
-    gen(state, RV_BLOCK_INSN | insn.length);
-    gen(state, state->orig_ip);
-    gen(state, insn.expanded);
-    gen(state, insn.raw);
+    extern void gadget_rv_exec(void);
+    gen(state, (unsigned long) gadget_rv_exec);
+    gen(state, state->orig_ip + insn.length);
 
     state->ip += insn.length;
-    return decoded && !rv_ends_block(&insn);
+    bool continues = decoded && !rv_ends_block(&insn);
+    if (!continues)
+        gen_exit(state);
+    return continues;
 }

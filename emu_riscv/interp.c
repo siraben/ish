@@ -586,6 +586,11 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
     return INT_NONE;
 }
 
+#if ENGINE_ASBESTOS
+int rv_exec_one_gadget(struct cpu_state *cpu, struct tlb *tlb) {
+    return exec_one(cpu, tlb);
+}
+#else
 int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     cpu->poked_ptr = &cpu->_poked;
     cpu->_poked = false;
@@ -605,3 +610,4 @@ void cpu_poke(struct cpu_state *cpu) {
     if (cpu->poked_ptr != NULL)
         *cpu->poked_ptr = true;
 }
+#endif

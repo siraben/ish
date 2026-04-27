@@ -1,4 +1,14 @@
-#include "../gadgets-generic.h"
+#if __APPLE__
+#define NAME(x) _##x
+#else
+#define NAME(x) x
+#endif
+
+.macro .type_compat type:vararg
+#if !__APPLE__
+    .type \type
+#endif
+.endm
 
 /*
  * RV64GC -> AArch64 gadget ABI.
@@ -47,42 +57,9 @@ rv_a7 .req x15
 .endm
 
 .macro rv_load_hot_regs
-    ldr rv_ra, [_cpu, 24]   /* cpu.x[1] */
-    ldr rv_sp, [_cpu, 32]   /* cpu.x[2] */
-    ldr rv_gp, [_cpu, 40]   /* cpu.x[3] */
-    ldr rv_tp, [_cpu, 48]   /* cpu.x[4] */
-    ldr rv_t0, [_cpu, 56]   /* cpu.x[5] */
-    ldr rv_t1, [_cpu, 64]   /* cpu.x[6] */
-    ldr rv_t2, [_cpu, 72]   /* cpu.x[7] */
-    ldr rv_s0, [_cpu, 80]   /* cpu.x[8] */
-    ldr rv_a0, [_cpu, 96]   /* cpu.x[10] */
-    ldr rv_a1, [_cpu, 104]  /* cpu.x[11] */
-    ldr rv_a2, [_cpu, 112]  /* cpu.x[12] */
-    ldr rv_a3, [_cpu, 120]  /* cpu.x[13] */
-    ldr rv_a4, [_cpu, 128]  /* cpu.x[14] */
-    ldr rv_a5, [_cpu, 136]  /* cpu.x[15] */
-    ldr rv_a6, [_cpu, 144]  /* cpu.x[16] */
-    ldr rv_a7, [_cpu, 152]  /* cpu.x[17] */
 .endm
 
 .macro rv_save_hot_regs
-    str xzr, [_cpu, 16]     /* cpu.x[0] */
-    str rv_ra, [_cpu, 24]
-    str rv_sp, [_cpu, 32]
-    str rv_gp, [_cpu, 40]
-    str rv_tp, [_cpu, 48]
-    str rv_t0, [_cpu, 56]
-    str rv_t1, [_cpu, 64]
-    str rv_t2, [_cpu, 72]
-    str rv_s0, [_cpu, 80]
-    str rv_a0, [_cpu, 96]
-    str rv_a1, [_cpu, 104]
-    str rv_a2, [_cpu, 112]
-    str rv_a3, [_cpu, 120]
-    str rv_a4, [_cpu, 128]
-    str rv_a5, [_cpu, 136]
-    str rv_a6, [_cpu, 144]
-    str rv_a7, [_cpu, 152]
 .endm
 
 # vim: ft=gas

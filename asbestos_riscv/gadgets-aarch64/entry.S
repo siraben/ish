@@ -1,6 +1,11 @@
 #include "emu/interrupt.h"
 #include "gadgets.h"
 
+# Hard-coded until asbestos_riscv grows its own generated offsets file.
+# Keep in sync with emu_riscv/cpu.h: pc aliases eip after mmu, cycle, x[32].
+.equ RV_CPU_pc, 272
+.equ RV_FIBER_BLOCK_code, 192
+
 .global NAME(fiber_enter)
 .type_compat fiber_enter,function
 NAME(fiber_enter):
@@ -12,7 +17,7 @@ NAME(fiber_enter):
     stp x29, x30, [sp, 0x50]
     mov _cpu, x1
     mov _tlb, x2
-    add _ip, x0, 96 /* offsetof(struct fiber_block, code) on arm64 */
+    add _ip, x0, RV_FIBER_BLOCK_code
     rv_load_hot_regs
     rv_gret
 
@@ -41,7 +46,25 @@ NAME(fiber_exit):
     b NAME(fiber_exit)
 
 .rv_gadget exit
-    mov _tmp, INT_TIMER
+    mov _tmp, INT_NONE
     b NAME(fiber_exit)
+
+.rv_gadget exec
+    stp x1, x2, [sp, -0x30]!
+    stp x3, x4, [sp, 0x10]
+    str lr, [sp, 0x20]
+    mov x0, _cpu
+    mov x1, _tlb
+    bl NAME(rv_exec_one_gadget)
+    ldr lr, [sp, 0x20]
+    ldp x3, x4, [sp, 0x10]
+    ldp x1, x2, [sp], 0x30
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    ldr x3, [_ip]
+    ldr x4, [_cpu, RV_CPU_pc]
+    cmp x3, x4
+    b.ne NAME(fiber_exit)
+    rv_gret 1
 
 # vim: ft=gas

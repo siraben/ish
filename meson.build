@@ -44,6 +44,7 @@ emu_src = [
     'emu_riscv/interp.c',
     'asbestos_riscv/asbestos.c',
     'asbestos_riscv/gen.c',
+    'asbestos_riscv/gadgets-aarch64/entry.S',
 ]
 
 libish_emu = library('ish_emu', emu_src, include_directories: includes)

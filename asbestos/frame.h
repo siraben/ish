@@ -1,5 +1,9 @@
 #include <stdatomic.h>
+#if GUEST_RISCV64
+#include "emu_riscv/cpu.h"
+#else
 #include "emu/cpu.h"
+#endif
 
 // keep in sync with asm
 #define FIBER_RETURN_CACHE_SIZE 4096

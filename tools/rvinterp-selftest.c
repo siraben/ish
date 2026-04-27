@@ -1,12 +1,28 @@
 #include <assert.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "emu_riscv/cpu.h"
 #include "emu_riscv/decode.h"
 #include "emu/interrupt.h"
 #include "emu/tlb.h"
+#include "asbestos/asbestos.h"
+
+int current_pid(void) {
+    return 0;
+}
+
+_Noreturn void die(const char *msg, ...) {
+    va_list args;
+    va_start(args, msg);
+    vfprintf(stderr, msg, args);
+    va_end(args);
+    fputc('\n', stderr);
+    abort();
+}
 
 struct flat_mmu {
     struct mmu mmu;
@@ -59,6 +75,7 @@ int main(void) {
             .changes = 1,
         },
     };
+    flat.mmu.asbestos = asbestos_new(&flat.mmu);
     struct tlb tlb = {};
     tlb_refresh(&tlb, &flat.mmu);
 
@@ -94,6 +111,7 @@ int main(void) {
     assert(get_double(&flat, 0x390) == 3.75);
 
     cpu_poke(&cpu);
+    asbestos_free(flat.mmu.asbestos);
     puts("rvinterp selftest passed");
     return 0;
 }

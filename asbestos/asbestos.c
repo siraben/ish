@@ -1,9 +1,17 @@
 #define DEFAULT_CHANNEL instr
 #include "debug.h"
 #include "asbestos/asbestos.h"
+#if GUEST_RISCV64
+#include "asbestos_riscv/gen.h"
+#else
 #include "asbestos/gen.h"
+#endif
 #include "asbestos/frame.h"
+#if GUEST_RISCV64
+#include "emu_riscv/cpu.h"
+#else
 #include "emu/cpu.h"
+#endif
 #include "emu/interrupt.h"
 #include "util/list.h"
 
