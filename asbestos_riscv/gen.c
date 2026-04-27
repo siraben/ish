@@ -96,6 +96,33 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         gen(state, state->orig_ip + insn->length);
         return true;
     }
+    case RV_OP_JAL: {
+        extern void gadget_rv_jal(void);
+        gen(state, (unsigned long) gadget_rv_jal);
+        gen(state, insn->rd);
+        gen(state, state->orig_ip + insn->length);
+        gen(state, state->orig_ip + insn->imm);
+        return true;
+    }
+    case RV_OP_JALR: {
+        extern void gadget_rv_jalr(void);
+        gen(state, (unsigned long) gadget_rv_jalr);
+        gen(state, insn->rd);
+        gen(state, insn->rs1);
+        gen(state, (unsigned long) insn->imm);
+        gen(state, state->orig_ip + insn->length);
+        return true;
+    }
+    case RV_OP_BRANCH: {
+        extern void gadget_rv_branch(void);
+        gen(state, (unsigned long) gadget_rv_branch);
+        gen(state, insn->funct3);
+        gen(state, insn->rs1);
+        gen(state, insn->rs2);
+        gen(state, state->orig_ip + insn->imm);
+        gen(state, state->orig_ip + insn->length);
+        return true;
+    }
     case RV_OP_OP_IMM:
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_addi(void); gadget = gadget_rv_addi; break; }

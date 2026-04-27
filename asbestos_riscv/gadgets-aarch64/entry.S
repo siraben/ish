@@ -90,6 +90,78 @@ NAME(fiber_exit):
     b.ne NAME(fiber_exit)
     rv_gret 1
 
+.rv_gadget branch
+    ldr x3, [_ip]      /* funct3 */
+    ldr x4, [_ip, 8]  /* rs1 */
+    ldr x5, [_ip, 16] /* rs2 */
+    ldr x9, [_ip, 24] /* target pc */
+    ldr x10, [_ip, 32] /* fallthrough pc */
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cmp x3, 0
+    b.eq 1f
+    cmp x3, 1
+    b.eq 2f
+    cmp x3, 4
+    b.eq 3f
+    cmp x3, 5
+    b.eq 4f
+    cmp x3, 6
+    b.eq 5f
+    cmp x3, 7
+    b.eq 6f
+    mov x11, x10
+    b 7f
+1:
+    cmp x6, x8
+    csel x11, x9, x10, eq
+    b 7f
+2:
+    cmp x6, x8
+    csel x11, x9, x10, ne
+    b 7f
+3:
+    cmp x6, x8
+    csel x11, x9, x10, lt
+    b 7f
+4:
+    cmp x6, x8
+    csel x11, x9, x10, ge
+    b 7f
+5:
+    cmp x6, x8
+    csel x11, x9, x10, lo
+    b 7f
+6:
+    cmp x6, x8
+    csel x11, x9, x10, hs
+7:
+    str x11, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_NONE
+    b NAME(fiber_exit)
+
+.rv_gadget jal
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* return pc */
+    ldr x5, [_ip, 16] /* target pc */
+    rv_store_x x4, x3
+    str x5, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_NONE
+    b NAME(fiber_exit)
+
+.rv_gadget jalr
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* rs1 */
+    ldr x5, [_ip, 16] /* imm */
+    ldr x6, [_ip, 24] /* return pc */
+    rv_load_x x8, x4
+    add x8, x8, x5
+    bic x8, x8, 1
+    rv_store_x x6, x3
+    str x8, [_cpu, RV_CPU_pc]
+    mov _tmp, INT_NONE
+    b NAME(fiber_exit)
+
 .rv_gadget lui
     ldr x3, [_ip]      /* rd */
     ldr x4, [_ip, 8]  /* imm */
