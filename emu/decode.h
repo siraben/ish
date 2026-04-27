@@ -194,7 +194,11 @@ restart:
                 case 0xb0: TRACEI("cmpxchg reg8, modrm8");
                            READMODRM_MEM; CMPXCHG(modrm_reg, modrm_val,8); break;
                 case 0xb1: TRACEI("cmpxchg reg, modrm");
-                           READMODRM_MEM; CMPXCHG(modrm_reg, modrm_val,oz); break;
+                           READMODRM;
+#if OP_SIZE == 16
+                           if (modrm.type == modrm_reg) UNDEFINED;
+#endif
+                           CMPXCHG(modrm_reg, modrm_val,oz); break;
 
                 case 0xb3: TRACEI("btr reg, modrm");
                            READMODRM; BTR(modrm_reg, modrm_val,oz); break;

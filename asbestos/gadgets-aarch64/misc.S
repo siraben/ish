@@ -84,6 +84,28 @@
 .irp size, SIZE_LIST
     ss \size, do_cmpxchg
 .endr
+
+.macro do_cmpxchg32_reg arg, reg
+    .gadget cmpxchg32_\arg
+        mov w8, \reg
+        setf_a eax, w8
+        mov w9, eax
+        do_add sub, w9, w8,
+        setf_zsp , val=w9
+        csel eax, w8, eax, ne
+        csel \reg, _tmp, \reg, eq
+        gret
+.endm
+
+do_cmpxchg32_reg reg_a, eax
+do_cmpxchg32_reg reg_b, ebx
+do_cmpxchg32_reg reg_c, ecx
+do_cmpxchg32_reg reg_d, edx
+do_cmpxchg32_reg reg_si, esi
+do_cmpxchg32_reg reg_di, edi
+do_cmpxchg32_reg reg_bp, ebp
+do_cmpxchg32_reg reg_sp, esp
+
 .gadget_array cmpxchg
 .gadget_array atomic_cmpxchg
 
