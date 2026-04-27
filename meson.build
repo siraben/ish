@@ -60,6 +60,7 @@ emu_src += [
     'asbestos/asbestos.c',
     'asbestos/gen.c',
     'asbestos/helpers.c',
+    'asbestos/profile.c',
     gadgets+'/entry.S',
     gadgets+'/memory.S',
     gadgets+'/control.S',

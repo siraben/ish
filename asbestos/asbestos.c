@@ -3,6 +3,7 @@
 #include "asbestos/asbestos.h"
 #include "asbestos/gen.h"
 #include "asbestos/frame.h"
+#include "asbestos/profile.h"
 #include "emu/cpu.h"
 #include "emu/interrupt.h"
 #include "util/list.h"
@@ -264,6 +265,9 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         cpu->poked_ptr = &cpu->_poked;
     tlb_refresh(tlb, cpu->mmu);
     int interrupt = (cpu->tf ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb);
+#if ASBESTOS_INSTRUMENT
+    asbestos_profile_record_interrupt(interrupt);
+#endif
     cpu->trapno = interrupt;
 
     struct asbestos *asbestos = cpu->mmu->asbestos;

@@ -1,12 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
-#if ASBESTOS_INSTRUMENT
-#include <pthread.h>
-#include <stdatomic.h>
-#include <stdio.h>
-#include <stdlib.h>
-#endif
 #include "asbestos/gen.h"
+#include "asbestos/profile.h"
 #include "emu/modrm.h"
 #include "emu/cpuid.h"
 #include "emu/fpu.h"
@@ -17,64 +12,12 @@ static int gen_step32(struct gen_state *state, struct tlb *tlb);
 static int gen_step16(struct gen_state *state, struct tlb *tlb);
 
 #if ASBESTOS_INSTRUMENT
-#define ASBESTOS_PROFILE_BUCKETS 512
-
-struct asbestos_profile_bucket {
-    atomic_uint_fast64_t instructions;
-    atomic_uint_fast64_t code_words;
-    atomic_uint_fast64_t guest_bytes;
-};
-
-static struct asbestos_profile_bucket asbestos_profile[ASBESTOS_PROFILE_BUCKETS];
-static atomic_uint_fast64_t asbestos_profile_blocks;
-static atomic_uint_fast64_t asbestos_profile_block_words;
-static atomic_uint_fast64_t asbestos_profile_block_guest_bytes;
-static bool asbestos_profile_enabled;
-
-static void asbestos_profile_dump(void) {
-    const char *path = getenv("ISH_ASBESTOS_PROFILE");
-    FILE *out = stdout;
-
-    if (!asbestos_profile_enabled)
-        return;
-    if (path != NULL && path[0] != '\0') {
-        out = fopen(path, "w");
-        if (out == NULL)
-            out = stdout;
-    }
-
-    fprintf(out, "kind\tkey\tinstructions\tcode_words\tguest_bytes\n");
-    for (unsigned i = 0; i < ASBESTOS_PROFILE_BUCKETS; i++) {
-        uint64_t instructions = atomic_load_explicit(&asbestos_profile[i].instructions, memory_order_relaxed);
-        if (instructions == 0)
-            continue;
-        fprintf(out, "opcode\t%03x\t%llu\t%llu\t%llu\n", i,
-                (unsigned long long) instructions,
-                (unsigned long long) atomic_load_explicit(&asbestos_profile[i].code_words, memory_order_relaxed),
-                (unsigned long long) atomic_load_explicit(&asbestos_profile[i].guest_bytes, memory_order_relaxed));
-    }
-    fprintf(out, "blocks\tall\t%llu\t%llu\t%llu\n",
-            (unsigned long long) atomic_load_explicit(&asbestos_profile_blocks, memory_order_relaxed),
-            (unsigned long long) atomic_load_explicit(&asbestos_profile_block_words, memory_order_relaxed),
-            (unsigned long long) atomic_load_explicit(&asbestos_profile_block_guest_bytes, memory_order_relaxed));
-
-    if (out != stdout)
-        fclose(out);
-}
-
-static void asbestos_profile_init(void) {
-    const char *path = getenv("ISH_ASBESTOS_PROFILE");
-    asbestos_profile_enabled = path != NULL;
-    if (asbestos_profile_enabled)
-        atexit(asbestos_profile_dump);
-}
-
 static unsigned asbestos_profile_opcode_key(struct tlb *tlb, addr_t ip) {
     uint8_t opcode = 0;
     uint8_t opcode2 = 0;
 
     if (!tlb_read(tlb, ip, &opcode, sizeof(opcode)))
-        return ASBESTOS_PROFILE_BUCKETS - 1;
+        return 511;
     if (opcode == 0x0f && tlb_read(tlb, ip + 1, &opcode2, sizeof(opcode2)))
         return 0x100u + opcode2;
     return opcode;
@@ -84,9 +27,7 @@ static void asbestos_profile_record(struct tlb *tlb, addr_t start_ip, addr_t end
     unsigned key = asbestos_profile_opcode_key(tlb, start_ip);
     uint64_t guest_bytes = end_ip >= start_ip ? end_ip - start_ip : 0;
 
-    atomic_fetch_add_explicit(&asbestos_profile[key].instructions, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&asbestos_profile[key].code_words, code_words, memory_order_relaxed);
-    atomic_fetch_add_explicit(&asbestos_profile[key].guest_bytes, guest_bytes, memory_order_relaxed);
+    asbestos_profile_record_opcode(key, code_words, guest_bytes);
 }
 #endif
 
@@ -98,8 +39,7 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
 #endif
     int result = gen_step32(state, tlb);
 #if ASBESTOS_INSTRUMENT
-    if (asbestos_profile_enabled)
-        asbestos_profile_record(tlb, state->orig_ip, state->ip, state->size - size_before);
+    asbestos_profile_record(tlb, state->orig_ip, state->ip, state->size - size_before);
 #endif
     return result;
 }
@@ -120,10 +60,6 @@ static void gen(struct gen_state *state, unsigned long thing) {
 }
 
 void gen_start(addr_t addr, struct gen_state *state) {
-#if ASBESTOS_INSTRUMENT
-    static pthread_once_t profile_once = PTHREAD_ONCE_INIT;
-    pthread_once(&profile_once, asbestos_profile_init);
-#endif
     state->capacity = FIBER_BLOCK_INITIAL_CAPACITY;
     state->size = 0;
     state->ip = addr;
@@ -163,11 +99,7 @@ void gen_end(struct gen_state *state) {
         list_init(&block->page[i]);
     }
 #if ASBESTOS_INSTRUMENT
-    if (asbestos_profile_enabled) {
-        atomic_fetch_add_explicit(&asbestos_profile_blocks, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&asbestos_profile_block_words, state->size, memory_order_relaxed);
-        atomic_fetch_add_explicit(&asbestos_profile_block_guest_bytes, block->end_addr - block->addr + 1, memory_order_relaxed);
-    }
+    asbestos_profile_record_block(state->size, block->end_addr - block->addr + 1);
 #endif
 }
 

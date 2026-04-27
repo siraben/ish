@@ -1,4 +1,5 @@
 #include <string.h>
+#include "asbestos/profile.h"
 #include "debug.h"
 #include "kernel/calls.h"
 #include "emu/interrupt.h"
@@ -260,6 +261,9 @@ void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
     if (interrupt == INT_SYSCALL) {
         unsigned syscall_num = cpu->eax;
+#if ASBESTOS_INSTRUMENT
+        asbestos_profile_record_syscall(syscall_num);
+#endif
         if (syscall_num >= NUM_SYSCALLS || syscall_table[syscall_num] == NULL) {
             printk("%d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
             cpu->eax = _ENOSYS;
