@@ -56,6 +56,75 @@ int rv_gadget_store_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, un
     return INT_NONE;
 }
 
+int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
+        unsigned width, unsigned rd, unsigned rs1, unsigned rs2) {
+    if (width != 4 && width != 8)
+        return INT_UNDEFINED;
+
+    addr_t addr = rs1 == 0 ? 0 : cpu->x[rs1];
+    if (PGOFFSET(addr) > PAGE_SIZE - width)
+        return INT_UNDEFINED;
+
+    uint64_t loaded = 0;
+    if (!tlb_read(tlb, addr, &loaded, width)) {
+        cpu->segfault_addr = tlb->segfault_addr;
+        cpu->segfault_was_write = true;
+        return INT_GPF;
+    }
+    if (width == 4)
+        loaded = rv_gadget_sign_extend((uint32_t) loaded, 32);
+
+    if (funct5 == 0x02) {
+        cpu->reservation_addr = addr;
+        cpu->reservation_valid = true;
+        if (rd != 0)
+            cpu->x[rd] = loaded;
+        return INT_NONE;
+    }
+
+    uint64_t rs2_value = rs2 == 0 ? 0 : cpu->x[rs2];
+    uint64_t result = rs2_value;
+    bool should_store = true;
+    if (funct5 == 0x03) {
+        should_store = cpu->reservation_valid && cpu->reservation_addr == addr;
+        cpu->reservation_valid = false;
+        if (rd != 0)
+            cpu->x[rd] = should_store ? 0 : 1;
+    } else {
+        if (rd != 0)
+            cpu->x[rd] = loaded;
+        switch (funct5) {
+        case 0x00: result = loaded + rs2_value; break;
+        case 0x01: result = rs2_value; break;
+        case 0x04: result = loaded ^ rs2_value; break;
+        case 0x08: result = loaded | rs2_value; break;
+        case 0x0c: result = loaded & rs2_value; break;
+        case 0x10: result = (int64_t) loaded < (int64_t) rs2_value ? loaded : rs2_value; break;
+        case 0x14: result = (int64_t) loaded > (int64_t) rs2_value ? loaded : rs2_value; break;
+        case 0x18: result = loaded < rs2_value ? loaded : rs2_value; break;
+        case 0x1c: result = loaded > rs2_value ? loaded : rs2_value; break;
+        default: return INT_UNDEFINED;
+        }
+    }
+
+    if (should_store) {
+        cpu->reservation_valid = false;
+        bool ok;
+        if (width == 4) {
+            uint32_t narrow = result;
+            ok = tlb_write(tlb, addr, &narrow, width);
+        } else {
+            ok = tlb_write(tlb, addr, &result, width);
+        }
+        if (!ok) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = true;
+            return INT_GPF;
+        }
+    }
+    return INT_NONE;
+}
+
 int rv_gadget_fload_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, unsigned funct3, unsigned rd) {
     if (funct3 == 2) {
         uint32_t value;
@@ -333,6 +402,19 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
             gen(state, insn->rs1);
             gen(state, insn->rs2);
             gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
+    case RV_OP_AMO:
+        if (insn->funct3 == 2 || insn->funct3 == 3) {
+            extern void gadget_rv_amo(void);
+            gen(state, (unsigned long) gadget_rv_amo);
+            gen(state, (unsigned long) rv_bits(insn->expanded, 31, 27));
+            gen(state, insn->funct3 == 2 ? 4 : 8);
+            gen(state, insn->rd);
+            gen(state, insn->rs1);
+            gen(state, insn->rs2);
             gen(state, state->orig_ip + insn->length);
             return true;
         }

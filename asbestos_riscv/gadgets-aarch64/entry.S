@@ -323,6 +323,23 @@ NAME(fiber_exit):
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 5
 
+.rv_gadget amo
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _tlb
+    ldr x2, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    ldr x5, [_ip, 24]
+    ldr x6, [_ip, 32]
+    bl NAME(rv_gadget_amo)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    rv_write_pc_and_continue 6
+
 .rv_gadget lb
     ldr x10, [_ip]
     ldr x3, [_ip, 8]
