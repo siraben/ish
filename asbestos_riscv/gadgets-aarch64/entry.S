@@ -340,6 +340,18 @@ NAME(fiber_exit):
     b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 6
 
+.rv_gadget fp
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _ip
+    bl NAME(rv_gadget_fp)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    rv_write_pc_and_continue 9
+
 .rv_gadget lb
     ldr x10, [_ip]
     ldr x3, [_ip, 8]

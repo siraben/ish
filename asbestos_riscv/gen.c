@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "asbestos_riscv/gen.h"
 #include "debug.h"
@@ -231,6 +233,189 @@ int rv_gadget_csr(struct cpu_state *cpu, unsigned funct3, unsigned rd, unsigned 
         return INT_UNDEFINED;
     }
     return INT_NONE;
+}
+
+static float rv_gadget_freg_s(struct cpu_state *cpu, unsigned reg) {
+    uint32_t bits = cpu->f[reg];
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static double rv_gadget_freg_d(struct cpu_state *cpu, unsigned reg) {
+    double value;
+    memcpy(&value, &cpu->f[reg], sizeof(value));
+    return value;
+}
+
+static void rv_gadget_store_freg_s(struct cpu_state *cpu, unsigned reg, float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    cpu->f[reg] = UINT64_C(0xffffffff00000000) | bits;
+}
+
+static void rv_gadget_store_freg_d(struct cpu_state *cpu, unsigned reg, double value) {
+    memcpy(&cpu->f[reg], &value, sizeof(value));
+}
+
+int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
+    enum rv_decode_op op = (enum rv_decode_op) params[0];
+    unsigned funct5 = params[1];
+    unsigned fmt = params[2];
+    unsigned funct3 = params[3];
+    unsigned rd = params[4];
+    unsigned rs1 = params[5];
+    unsigned rs2 = params[6];
+    unsigned rs3 = params[7];
+    uint64_t xrs1 = rs1 == 0 ? 0 : cpu->x[rs1];
+
+    if (op == RV_OP_OP_FP) {
+        if (fmt == 0) {
+            float a = rv_gadget_freg_s(cpu, rs1);
+            float b = rv_gadget_freg_s(cpu, rs2);
+            switch (funct5) {
+            case 0x00: rv_gadget_store_freg_s(cpu, rd, a + b); break;
+            case 0x01: rv_gadget_store_freg_s(cpu, rd, a - b); break;
+            case 0x02: rv_gadget_store_freg_s(cpu, rd, a * b); break;
+            case 0x03: rv_gadget_store_freg_s(cpu, rd, a / b); break;
+            case 0x0b: rv_gadget_store_freg_s(cpu, rd, sqrtf(a)); break;
+            case 0x04: {
+                uint32_t ia = cpu->f[rs1];
+                uint32_t ib = cpu->f[rs2];
+                uint32_t sign = ib & 0x80000000u;
+                if (funct3 == 1)
+                    sign ^= 0x80000000u;
+                if (funct3 == 2)
+                    sign ^= ia & 0x80000000u;
+                cpu->f[rd] = UINT64_C(0xffffffff00000000) | ((ia & 0x7fffffffu) | sign);
+                break;
+            }
+            case 0x05:
+                if (funct3 == 0)
+                    rv_gadget_store_freg_s(cpu, rd, fminf(a, b));
+                else if (funct3 == 1)
+                    rv_gadget_store_freg_s(cpu, rd, fmaxf(a, b));
+                else
+                    return INT_UNDEFINED;
+                break;
+            case 0x14:
+                if (rd != 0) {
+                    if (funct3 == 0)
+                        cpu->x[rd] = a <= b;
+                    else if (funct3 == 1)
+                        cpu->x[rd] = a < b;
+                    else if (funct3 == 2)
+                        cpu->x[rd] = a == b;
+                    else
+                        return INT_UNDEFINED;
+                }
+                break;
+            case 0x1c:
+                if (funct3 != 0)
+                    return INT_UNDEFINED;
+                if (rd != 0)
+                    cpu->x[rd] = (int32_t) (uint32_t) cpu->f[rs1];
+                break;
+            case 0x1e:
+                if (funct3 != 0)
+                    return INT_UNDEFINED;
+                cpu->f[rd] = UINT64_C(0xffffffff00000000) | (uint32_t) xrs1;
+                break;
+            default:
+                return INT_UNDEFINED;
+            }
+            return INT_NONE;
+        }
+        if (fmt == 1) {
+            double a = rv_gadget_freg_d(cpu, rs1);
+            double b = rv_gadget_freg_d(cpu, rs2);
+            switch (funct5) {
+            case 0x00: rv_gadget_store_freg_d(cpu, rd, a + b); break;
+            case 0x01: rv_gadget_store_freg_d(cpu, rd, a - b); break;
+            case 0x02: rv_gadget_store_freg_d(cpu, rd, a * b); break;
+            case 0x03: rv_gadget_store_freg_d(cpu, rd, a / b); break;
+            case 0x0b: rv_gadget_store_freg_d(cpu, rd, sqrt(a)); break;
+            case 0x04: {
+                uint64_t ia = cpu->f[rs1];
+                uint64_t ib = cpu->f[rs2];
+                uint64_t sign = ib & UINT64_C(0x8000000000000000);
+                if (funct3 == 1)
+                    sign ^= UINT64_C(0x8000000000000000);
+                if (funct3 == 2)
+                    sign ^= ia & UINT64_C(0x8000000000000000);
+                cpu->f[rd] = (ia & UINT64_C(0x7fffffffffffffff)) | sign;
+                break;
+            }
+            case 0x05:
+                if (funct3 == 0)
+                    rv_gadget_store_freg_d(cpu, rd, fmin(a, b));
+                else if (funct3 == 1)
+                    rv_gadget_store_freg_d(cpu, rd, fmax(a, b));
+                else
+                    return INT_UNDEFINED;
+                break;
+            case 0x14:
+                if (rd != 0) {
+                    if (funct3 == 0)
+                        cpu->x[rd] = a <= b;
+                    else if (funct3 == 1)
+                        cpu->x[rd] = a < b;
+                    else if (funct3 == 2)
+                        cpu->x[rd] = a == b;
+                    else
+                        return INT_UNDEFINED;
+                }
+                break;
+            case 0x1c:
+                if (funct3 != 0)
+                    return INT_UNDEFINED;
+                if (rd != 0)
+                    cpu->x[rd] = cpu->f[rs1];
+                break;
+            case 0x1e:
+                if (funct3 != 0)
+                    return INT_UNDEFINED;
+                cpu->f[rd] = xrs1;
+                break;
+            default:
+                return INT_UNDEFINED;
+            }
+            return INT_NONE;
+        }
+        return INT_UNDEFINED;
+    }
+
+    if (op == RV_OP_MADD || op == RV_OP_MSUB || op == RV_OP_NMSUB || op == RV_OP_NMADD) {
+        if (fmt == 0) {
+            float a = rv_gadget_freg_s(cpu, rs1);
+            float b = rv_gadget_freg_s(cpu, rs2);
+            float c = rv_gadget_freg_s(cpu, rs3);
+            if (op == RV_OP_MADD)
+                rv_gadget_store_freg_s(cpu, rd, a * b + c);
+            else if (op == RV_OP_MSUB)
+                rv_gadget_store_freg_s(cpu, rd, a * b - c);
+            else if (op == RV_OP_NMSUB)
+                rv_gadget_store_freg_s(cpu, rd, -(a * b) + c);
+            else
+                rv_gadget_store_freg_s(cpu, rd, -(a * b) - c);
+            return INT_NONE;
+        }
+        if (fmt == 1) {
+            double a = rv_gadget_freg_d(cpu, rs1);
+            double b = rv_gadget_freg_d(cpu, rs2);
+            double c = rv_gadget_freg_d(cpu, rs3);
+            if (op == RV_OP_MADD)
+                rv_gadget_store_freg_d(cpu, rd, a * b + c);
+            else if (op == RV_OP_MSUB)
+                rv_gadget_store_freg_d(cpu, rd, a * b - c);
+            else if (op == RV_OP_NMSUB)
+                rv_gadget_store_freg_d(cpu, rd, -(a * b) + c);
+            else
+                rv_gadget_store_freg_d(cpu, rd, -(a * b) - c);
+            return INT_NONE;
+        }
+    }
+    return INT_UNDEFINED;
 }
 
 enum rv_block_marker {
@@ -552,6 +737,24 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         if (gadget != NULL)
             goto gen_reg;
         break;
+    case RV_OP_OP_FP:
+    case RV_OP_MADD:
+    case RV_OP_MSUB:
+    case RV_OP_NMSUB:
+    case RV_OP_NMADD: {
+        extern void gadget_rv_fp(void);
+        gen(state, (unsigned long) gadget_rv_fp);
+        gen(state, insn->op);
+        gen(state, (unsigned long) rv_bits(insn->expanded, 31, 27));
+        gen(state, (unsigned long) rv_bits(insn->expanded, 26, 25));
+        gen(state, insn->funct3);
+        gen(state, insn->rd);
+        gen(state, insn->rs1);
+        gen(state, insn->rs2);
+        gen(state, insn->rs3);
+        gen(state, state->orig_ip + insn->length);
+        return true;
+    }
     default:
         break;
     }
