@@ -258,6 +258,46 @@ static void rv_gadget_store_freg_d(struct cpu_state *cpu, unsigned reg, double v
     memcpy(&cpu->f[reg], &value, sizeof(value));
 }
 
+static uint64_t rv_gadget_fp_to_int_s(float value, unsigned kind) {
+    switch (kind) {
+    case 0: return (uint64_t) (int64_t) (int32_t) value;
+    case 1: return (uint64_t) (uint32_t) value;
+    case 2: return (uint64_t) (int64_t) value;
+    case 3: return (uint64_t) value;
+    default: return 0;
+    }
+}
+
+static uint64_t rv_gadget_fp_to_int_d(double value, unsigned kind) {
+    switch (kind) {
+    case 0: return (uint64_t) (int64_t) (int32_t) value;
+    case 1: return (uint64_t) (uint32_t) value;
+    case 2: return (uint64_t) (int64_t) value;
+    case 3: return (uint64_t) value;
+    default: return 0;
+    }
+}
+
+static float rv_gadget_int_to_fp_s(uint64_t value, unsigned kind) {
+    switch (kind) {
+    case 0: return (float) (int32_t) value;
+    case 1: return (float) (uint32_t) value;
+    case 2: return (float) (int64_t) value;
+    case 3: return (float) value;
+    default: return 0.0f;
+    }
+}
+
+static double rv_gadget_int_to_fp_d(uint64_t value, unsigned kind) {
+    switch (kind) {
+    case 0: return (double) (int32_t) value;
+    case 1: return (double) (uint32_t) value;
+    case 2: return (double) (int64_t) value;
+    case 3: return (double) value;
+    default: return 0.0;
+    }
+}
+
 int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
     enum rv_decode_op op = (enum rv_decode_op) params[0];
     unsigned funct5 = params[1];
@@ -309,6 +349,17 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                     else
                         return INT_UNDEFINED;
                 }
+                break;
+            case 0x18:
+                if (rs2 > 3)
+                    return INT_UNDEFINED;
+                if (rd != 0)
+                    cpu->x[rd] = rv_gadget_fp_to_int_s(a, rs2);
+                break;
+            case 0x1a:
+                if (rs2 > 3)
+                    return INT_UNDEFINED;
+                rv_gadget_store_freg_s(cpu, rd, rv_gadget_int_to_fp_s(xrs1, rs2));
                 break;
             case 0x1c:
                 if (funct3 != 0)
@@ -365,6 +416,19 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                     else
                         return INT_UNDEFINED;
                 }
+                break;
+            case 0x18:
+            case 0x19:
+                if (rs2 > 3)
+                    return INT_UNDEFINED;
+                if (rd != 0)
+                    cpu->x[rd] = rv_gadget_fp_to_int_d(a, rs2);
+                break;
+            case 0x1a:
+            case 0x1b:
+                if (rs2 > 3)
+                    return INT_UNDEFINED;
+                rv_gadget_store_freg_d(cpu, rd, rv_gadget_int_to_fp_d(xrs1, rs2));
                 break;
             case 0x1c:
                 if (funct3 != 0)

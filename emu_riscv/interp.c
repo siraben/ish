@@ -138,6 +138,46 @@ static void store_freg_d(struct cpu_state *cpu, unsigned reg, double value) {
     memcpy(&cpu->f[reg], &value, sizeof(value));
 }
 
+static uint64_t fp_to_int_s(float value, unsigned kind) {
+    switch (kind) {
+    case 0: return (uint64_t) (int64_t) (int32_t) value;
+    case 1: return (uint64_t) (uint32_t) value;
+    case 2: return (uint64_t) (int64_t) value;
+    case 3: return (uint64_t) value;
+    default: return 0;
+    }
+}
+
+static uint64_t fp_to_int_d(double value, unsigned kind) {
+    switch (kind) {
+    case 0: return (uint64_t) (int64_t) (int32_t) value;
+    case 1: return (uint64_t) (uint32_t) value;
+    case 2: return (uint64_t) (int64_t) value;
+    case 3: return (uint64_t) value;
+    default: return 0;
+    }
+}
+
+static float int_to_fp_s(uint64_t value, unsigned kind) {
+    switch (kind) {
+    case 0: return (float) (int32_t) value;
+    case 1: return (float) (uint32_t) value;
+    case 2: return (float) (int64_t) value;
+    case 3: return (float) value;
+    default: return 0.0f;
+    }
+}
+
+static double int_to_fp_d(uint64_t value, unsigned kind) {
+    switch (kind) {
+    case 0: return (double) (int32_t) value;
+    case 1: return (double) (uint32_t) value;
+    case 2: return (double) (int64_t) value;
+    case 3: return (double) value;
+    default: return 0.0;
+    }
+}
+
 static bool exec_amo(struct cpu_state *cpu, struct tlb *tlb, struct rv_insn *insn) {
     unsigned funct5 = rv_bits(insn->expanded, 31, 27);
     unsigned width = insn->funct3 == 2 ? 4 : insn->funct3 == 3 ? 8 : 0;
@@ -473,6 +513,16 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                 else
                     return raise_interrupt(cpu, INT_UNDEFINED);
                 break;
+            case 0x18:
+                if (insn.rs2 > 3)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_reg(cpu, insn.rd, fp_to_int_s(a, insn.rs2));
+                break;
+            case 0x1a:
+                if (insn.rs2 > 3)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_freg_s(cpu, insn.rd, int_to_fp_s(rs1, insn.rs2));
+                break;
             case 0x1c:
                 if (insn.funct3 != 0)
                     return raise_interrupt(cpu, INT_UNDEFINED);
@@ -523,6 +573,18 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                     store_reg(cpu, insn.rd, a == b);
                 else
                     return raise_interrupt(cpu, INT_UNDEFINED);
+                break;
+            case 0x18:
+            case 0x19:
+                if (insn.rs2 > 3)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_reg(cpu, insn.rd, fp_to_int_d(a, insn.rs2));
+                break;
+            case 0x1a:
+            case 0x1b:
+                if (insn.rs2 > 3)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_freg_d(cpu, insn.rd, int_to_fp_d(rs1, insn.rs2));
                 break;
             case 0x1c:
                 if (insn.funct3 != 0)

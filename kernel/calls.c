@@ -34,6 +34,29 @@ static sqword_t rv_success_stub(qword_t UNUSED(a0), qword_t UNUSED(a1), qword_t 
     return rv_ret32(syscall_success_stub());
 }
 
+struct riscv_hwprobe_pair_ {
+    sqword_t key;
+    qword_t value;
+};
+
+static sqword_t rv_sys_riscv_hwprobe(qword_t pairs_addr, qword_t pair_count,
+        qword_t UNUSED(cpu_count), qword_t UNUSED(cpus_addr), qword_t flags,
+        qword_t UNUSED(a5)) {
+    if (flags != 0)
+        return _EINVAL;
+    for (qword_t i = 0; i < pair_count; i++) {
+        addr_t pair_addr = pairs_addr + i * sizeof(struct riscv_hwprobe_pair_);
+        struct riscv_hwprobe_pair_ pair;
+        if (user_get(pair_addr, pair))
+            return _EFAULT;
+        pair.key = -1;
+        pair.value = 0;
+        if (user_put(pair_addr, pair))
+            return _EFAULT;
+    }
+    return 0;
+}
+
 #define RV_WRAP0(name) \
     static sqword_t rv_##name(qword_t UNUSED(a0), qword_t UNUSED(a1), qword_t UNUSED(a2), \
             qword_t UNUSED(a3), qword_t UNUSED(a4), qword_t UNUSED(a5)) { \
@@ -458,7 +481,7 @@ syscall_t syscall_table[] = {
     [241] = rv_stub, // perf_event_open needs host perf virtualization.
     [242] = rv_sys_accept4,
     [243] = rv_stub, // recvmmsg not represented by socket layer yet.
-    [258] = rv_stub, // riscv_hwprobe: expose via auxv/proc until full schema.
+    [258] = rv_sys_riscv_hwprobe,
     [259] = rv_success_stub, // riscv_flush_icache: interpreter has no i-cache.
     [260] = rv_sys_wait4,
     [261] = rv_sys_prlimit64,
