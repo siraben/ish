@@ -77,6 +77,7 @@ static bool rv_ends_block(const struct rv_insn *insn) {
 }
 
 static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
+    void (*gadget)(void) = NULL;
     switch (insn->op) {
     case RV_OP_LUI: {
         extern void gadget_rv_lui(void);
@@ -96,40 +97,105 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         return true;
     }
     case RV_OP_OP_IMM:
-        if (insn->funct3 == 0) {
-            extern void gadget_rv_addi(void);
-            gen(state, (unsigned long) gadget_rv_addi);
-            gen(state, insn->rd);
-            gen(state, insn->rs1);
-            gen(state, (unsigned long) insn->imm);
-            gen(state, state->orig_ip + insn->length);
-            return true;
+        switch (insn->funct3) {
+        case 0: { extern void gadget_rv_addi(void); gadget = gadget_rv_addi; break; }
+        case 1: { extern void gadget_rv_slli(void); gadget = gadget_rv_slli; break; }
+        case 2: { extern void gadget_rv_slti(void); gadget = gadget_rv_slti; break; }
+        case 3: { extern void gadget_rv_sltiu(void); gadget = gadget_rv_sltiu; break; }
+        case 4: { extern void gadget_rv_xori(void); gadget = gadget_rv_xori; break; }
+        case 5:
+            if (rv_bits(insn->expanded, 31, 26) == 0x10) {
+                extern void gadget_rv_srai(void); gadget = gadget_rv_srai;
+            } else {
+                extern void gadget_rv_srli(void); gadget = gadget_rv_srli;
+            }
+            break;
+        case 6: { extern void gadget_rv_ori(void); gadget = gadget_rv_ori; break; }
+        case 7: { extern void gadget_rv_andi(void); gadget = gadget_rv_andi; break; }
+        default:
+            break;
         }
+        if (gadget != NULL)
+            goto gen_imm;
+        break;
+    case RV_OP_OP_IMM_32:
+        switch (insn->funct3) {
+        case 0: { extern void gadget_rv_addiw(void); gadget = gadget_rv_addiw; break; }
+        case 1: { extern void gadget_rv_slliw(void); gadget = gadget_rv_slliw; break; }
+        case 5:
+            if (insn->funct7 == 0x20) {
+                extern void gadget_rv_sraiw(void); gadget = gadget_rv_sraiw;
+            } else {
+                extern void gadget_rv_srliw(void); gadget = gadget_rv_srliw;
+            }
+            break;
+        default:
+            break;
+        }
+        if (gadget != NULL)
+            goto gen_imm;
         break;
     case RV_OP_OP:
-        if (insn->funct7 == 0x00 && insn->funct3 == 0) {
-            extern void gadget_rv_add(void);
-            gen(state, (unsigned long) gadget_rv_add);
-            gen(state, insn->rd);
-            gen(state, insn->rs1);
-            gen(state, insn->rs2);
-            gen(state, state->orig_ip + insn->length);
-            return true;
+        if (insn->funct7 == 0x00) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_add(void); gadget = gadget_rv_add; break; }
+            case 1: { extern void gadget_rv_sll(void); gadget = gadget_rv_sll; break; }
+            case 2: { extern void gadget_rv_slt(void); gadget = gadget_rv_slt; break; }
+            case 3: { extern void gadget_rv_sltu(void); gadget = gadget_rv_sltu; break; }
+            case 4: { extern void gadget_rv_xor(void); gadget = gadget_rv_xor; break; }
+            case 5: { extern void gadget_rv_srl(void); gadget = gadget_rv_srl; break; }
+            case 6: { extern void gadget_rv_or(void); gadget = gadget_rv_or; break; }
+            case 7: { extern void gadget_rv_and(void); gadget = gadget_rv_and; break; }
+            default: break;
+            }
+        } else if (insn->funct7 == 0x20) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_sub(void); gadget = gadget_rv_sub; break; }
+            case 5: { extern void gadget_rv_sra(void); gadget = gadget_rv_sra; break; }
+            default: break;
+            }
         }
-        if (insn->funct7 == 0x20 && insn->funct3 == 0) {
-            extern void gadget_rv_sub(void);
-            gen(state, (unsigned long) gadget_rv_sub);
-            gen(state, insn->rd);
-            gen(state, insn->rs1);
-            gen(state, insn->rs2);
-            gen(state, state->orig_ip + insn->length);
-            return true;
+        if (gadget != NULL)
+            goto gen_reg;
+        break;
+    case RV_OP_OP_32:
+        if (insn->funct7 == 0x00) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_addw(void); gadget = gadget_rv_addw; break; }
+            case 1: { extern void gadget_rv_sllw(void); gadget = gadget_rv_sllw; break; }
+            case 5: { extern void gadget_rv_srlw(void); gadget = gadget_rv_srlw; break; }
+            default: break;
+            }
+        } else if (insn->funct7 == 0x20) {
+            switch (insn->funct3) {
+            case 0: { extern void gadget_rv_subw(void); gadget = gadget_rv_subw; break; }
+            case 5: { extern void gadget_rv_sraw(void); gadget = gadget_rv_sraw; break; }
+            default: break;
+            }
         }
+        if (gadget != NULL)
+            goto gen_reg;
         break;
     default:
         break;
     }
     return false;
+
+gen_imm:
+    gen(state, (unsigned long) gadget);
+    gen(state, insn->rd);
+    gen(state, insn->rs1);
+    gen(state, (unsigned long) insn->imm);
+    gen(state, state->orig_ip + insn->length);
+    return true;
+
+gen_reg:
+    gen(state, (unsigned long) gadget);
+    gen(state, insn->rd);
+    gen(state, insn->rs1);
+    gen(state, insn->rs2);
+    gen(state, state->orig_ip + insn->length);
+    return true;
 }
 
 int gen_step(struct gen_state *state, struct tlb *tlb) {

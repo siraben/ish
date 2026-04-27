@@ -113,6 +113,120 @@ NAME(fiber_exit):
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
 
+.rv_gadget andi
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    and x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget ori
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    orr x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget xori
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    eor x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget slti
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    cmp x6, x5
+    cset x6, lt
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sltiu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    cmp x6, x5
+    cset x6, lo
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget slli
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    lsl x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget srli
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    lsr x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget srai
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    asr x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget addiw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    add w6, w6, w5
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget slliw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    lsl w6, w6, w5
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget srliw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    lsr w6, w6, w5
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sraiw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    asr w6, w6, w5
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
 .rv_gadget add
     ldr x3, [_ip]      /* rd */
     ldr x4, [_ip, 8]  /* rs1 */
@@ -130,6 +244,143 @@ NAME(fiber_exit):
     rv_load_x x6, x4
     rv_load_x x8, x5
     sub x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget and
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    and x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget or
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    orr x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget xor
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    eor x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget slt
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cmp x6, x8
+    cset x6, lt
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sltu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    cmp x6, x8
+    cset x6, lo
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sll
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    lsl x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget srl
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    lsr x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sra
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    asr x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget addw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    add w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget subw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    sub w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sllw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    lsl w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget srlw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    lsr w6, w6, w8
+    sxtw x6, w6
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sraw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    asr w6, w6, w8
+    sxtw x6, w6
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
 
