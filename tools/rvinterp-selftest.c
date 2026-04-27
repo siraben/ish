@@ -87,11 +87,16 @@ int main(void) {
     put32(&flat, pc + 16, rv_encode_b(-8, 0, 11, 1, 0x63));    // bne a1,zero,loop
     put32(&flat, pc + 20, rv_encode_s(0, 10, 2, 3, 0x23));     // sd a0,0(sp)
     put32(&flat, pc + 24, rv_encode_i(0, 2, 3, 12, 0x03));     // ld a2,0(sp)
-    put32(&flat, pc + 28, rv_encode_i(0, 3, 3, 0, 0x07));      // fld ft0,0(gp)
-    put32(&flat, pc + 32, rv_encode_i(8, 3, 3, 1, 0x07));      // fld ft1,8(gp)
-    put32(&flat, pc + 36, rv_encode_r(0x01, 1, 0, 0, 2, 0x53)); // fadd.d ft2,ft0,ft1
-    put32(&flat, pc + 40, rv_encode_s(16, 2, 3, 3, 0x27));     // fsd ft2,16(gp)
-    put32(&flat, pc + 44, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
+    put32(&flat, pc + 28, rv_encode_i(-1, 0, 0, 13, 0x13));    // addi a3,zero,-1
+    put32(&flat, pc + 32, rv_encode_i(2, 0, 0, 14, 0x13));     // addi a4,zero,2
+    put32(&flat, pc + 36, rv_encode_r(0x01, 14, 13, 1, 15, 0x33)); // mulh a5,a3,a4
+    put32(&flat, pc + 40, rv_encode_r(0x01, 14, 13, 2, 16, 0x33)); // mulhsu a6,a3,a4
+    put32(&flat, pc + 44, rv_encode_r(0x01, 14, 13, 3, 17, 0x33)); // mulhu a7,a3,a4
+    put32(&flat, pc + 48, rv_encode_i(0, 3, 3, 0, 0x07));      // fld ft0,0(gp)
+    put32(&flat, pc + 52, rv_encode_i(8, 3, 3, 1, 0x07));      // fld ft1,8(gp)
+    put32(&flat, pc + 56, rv_encode_r(0x01, 1, 0, 0, 2, 0x53)); // fadd.d ft2,ft0,ft1
+    put32(&flat, pc + 60, rv_encode_s(16, 2, 3, 3, 0x27));     // fsd ft2,16(gp)
+    put32(&flat, pc + 64, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
     put_double(&flat, 0x380, 1.25);
     put_double(&flat, 0x388, 2.5);
 
@@ -106,7 +111,10 @@ int main(void) {
     assert(cpu.a0 == 15);
     assert(cpu.a1 == 0);
     assert(cpu.a2 == 15);
-    assert(cpu.pc == pc + 48);
+    assert(cpu.a5 == UINT64_MAX);
+    assert(cpu.a6 == UINT64_MAX);
+    assert(cpu.a7 == 1);
+    assert(cpu.pc == pc + 68);
     assert(get64(&flat, 0x300) == 15);
     assert(get_double(&flat, 0x390) == 3.75);
 

@@ -346,6 +346,9 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         } else if (insn->funct7 == 0x01) {
             switch (insn->funct3) {
             case 0: { extern void gadget_rv_mul(void); gadget = gadget_rv_mul; break; }
+            case 1: { extern void gadget_rv_mulh(void); gadget = gadget_rv_mulh; break; }
+            case 2: { extern void gadget_rv_mulhsu(void); gadget = gadget_rv_mulhsu; break; }
+            case 3: { extern void gadget_rv_mulhu(void); gadget = gadget_rv_mulhu; break; }
             case 4: { extern void gadget_rv_div(void); gadget = gadget_rv_div; break; }
             case 5: { extern void gadget_rv_divu(void); gadget = gadget_rv_divu; break; }
             case 6: { extern void gadget_rv_rem(void); gadget = gadget_rv_rem; break; }

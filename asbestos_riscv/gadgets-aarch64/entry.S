@@ -654,6 +654,39 @@ NAME(fiber_exit):
     rv_store_x x6, x3
     rv_write_pc_and_continue 4
 
+.rv_gadget mulh
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    smulh x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget mulhsu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    umulh x9, x6, x8
+    cmp x6, 0
+    sub x10, x9, x8
+    csel x6, x10, x9, lt
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget mulhu
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    umulh x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
 .rv_gadget div
     ldr x3, [_ip]
     ldr x4, [_ip, 8]
