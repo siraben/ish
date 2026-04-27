@@ -5,6 +5,11 @@
 # Keep in sync with emu_riscv/cpu.h: pc aliases eip after mmu, cycle, x[32].
 .equ RV_CPU_pc, 272
 .equ RV_FIBER_BLOCK_code, 192
+.equ RV_TLB_dirty_page, 8
+.equ RV_TLB_entries, 32
+.equ RV_TLB_ENTRY_page, 0
+.equ RV_TLB_ENTRY_page_if_writable, 8
+.equ RV_TLB_ENTRY_data_minus_addr, 16
 
 .macro rv_write_pc_and_continue param_count
     ldr x3, [_ip, (\param_count - 1) * 8]
@@ -27,6 +32,85 @@
     add x7, _cpu, 16
     str \src, [x7, \reg, lsl 3]
 1:
+.endm
+
+.macro rv_tlb_index_and_page
+    lsr x13, x12, 12
+    lsr x14, x12, 24
+    eor x13, x13, x14
+    lsr x14, x12, 36
+    eor x13, x13, x14
+    and x13, x13, 0x3ff
+    add x13, x13, x13, lsl 1
+    add x13, _tlb, x13, lsl 3
+    add x13, x13, RV_TLB_entries
+    lsr x14, x12, 12
+    lsl x14, x14, 12
+.endm
+
+.macro rv_tlb_read_prep bytes, id
+    and x13, x12, 0xfff
+    .if \bytes > 1
+        tst x12, (\bytes - 1)
+        b.ne .Lrv_slow_load_\id
+    .endif
+    cmp x13, (0x1000 - \bytes)
+    b.hi .Lrv_slow_load_\id
+    rv_tlb_index_and_page
+    ldr x15, [x13, RV_TLB_ENTRY_page]
+    cmp x15, x14
+    b.ne .Lrv_slow_load_\id
+    ldr x15, [x13, RV_TLB_ENTRY_data_minus_addr]
+    add x12, x15, x12
+.endm
+
+.macro rv_tlb_write_prep bytes, id
+    and x13, x12, 0xfff
+    .if \bytes > 1
+        tst x12, (\bytes - 1)
+        b.ne .Lrv_slow_store_\id
+    .endif
+    cmp x13, (0x1000 - \bytes)
+    b.hi .Lrv_slow_store_\id
+    rv_tlb_index_and_page
+    ldr x15, [x13, RV_TLB_ENTRY_page_if_writable]
+    cmp x15, x14
+    b.ne .Lrv_slow_store_\id
+    str x14, [_tlb, RV_TLB_dirty_page]
+    ldr x15, [x13, RV_TLB_ENTRY_data_minus_addr]
+    add x12, x15, x12
+.endm
+
+.macro rv_load_slow funct3, id
+.Lrv_slow_load_\id:
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _tlb
+    mov x2, x12
+    mov w3, \funct3
+    mov w4, w10
+    bl NAME(rv_gadget_load_slow)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cbnz x0, NAME(fiber_exit)
+    rv_write_pc_and_continue 4
+.endm
+
+.macro rv_store_slow funct3, id
+.Lrv_slow_store_\id:
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    mov x1, _tlb
+    mov x2, x12
+    mov w3, \funct3
+    mov x4, x6
+    bl NAME(rv_gadget_store_slow)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cbnz x0, NAME(fiber_exit)
+    rv_write_pc_and_continue 4
 .endm
 
 .global NAME(fiber_enter)
@@ -161,6 +245,138 @@ NAME(fiber_exit):
     str x8, [_cpu, RV_CPU_pc]
     mov _tmp, INT_NONE
     b NAME(fiber_exit)
+
+.rv_gadget lb
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 1, lb
+    ldrsb x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 0, lb
+
+.rv_gadget lh
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 2, lh
+    ldrsh x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 1, lh
+
+.rv_gadget lw
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 4, lw
+    ldrsw x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 2, lw
+
+.rv_gadget ld
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 8, ld
+    ldr x6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 3, ld
+
+.rv_gadget lbu
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 1, lbu
+    ldrb w6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 4, lbu
+
+.rv_gadget lhu
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 2, lhu
+    ldrh w6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 5, lhu
+
+.rv_gadget lwu
+    ldr x10, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x4
+    rv_tlb_read_prep 4, lwu
+    ldr w6, [x12]
+    rv_store_x x6, x10
+    rv_write_pc_and_continue 4
+    rv_load_slow 6, lwu
+
+.rv_gadget sb
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 1, sb
+    strb w6, [x12]
+    rv_write_pc_and_continue 4
+    rv_store_slow 0, sb
+
+.rv_gadget sh
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 2, sh
+    strh w6, [x12]
+    rv_write_pc_and_continue 4
+    rv_store_slow 1, sh
+
+.rv_gadget sw
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 4, sw
+    str w6, [x12]
+    rv_write_pc_and_continue 4
+    rv_store_slow 2, sw
+
+.rv_gadget sd
+    ldr x3, [_ip]
+    ldr x4, [_ip, 8]
+    ldr x5, [_ip, 16]
+    rv_load_x x12, x3
+    add x12, x12, x5
+    rv_load_x x6, x4
+    rv_tlb_write_prep 8, sd
+    str x6, [x12]
+    rv_write_pc_and_continue 4
+    rv_store_slow 3, sd
 
 .rv_gadget lui
     ldr x3, [_ip]      /* rd */

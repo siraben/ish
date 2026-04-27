@@ -1,10 +1,60 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 
 #include "asbestos_riscv/gen.h"
 #include "debug.h"
 #include "emu_riscv/decode.h"
+#include "emu_riscv/cpu.h"
 #include "emu/interrupt.h"
+#include "emu/tlb.h"
+
+static uint64_t rv_gadget_sign_extend(uint64_t value, unsigned bits) {
+    unsigned shift = 64 - bits;
+    return (uint64_t) ((int64_t) (value << shift) >> shift);
+}
+
+int rv_gadget_load_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, unsigned funct3, unsigned rd) {
+    uint64_t value = 0;
+    unsigned size;
+    switch (funct3) {
+    case 0: size = 1; break;
+    case 1: size = 2; break;
+    case 2: size = 4; break;
+    case 3: size = 8; break;
+    case 4: size = 1; break;
+    case 5: size = 2; break;
+    case 6: size = 4; break;
+    default: return INT_UNDEFINED;
+    }
+    if (!tlb_read(tlb, addr, &value, size)) {
+        cpu->segfault_addr = tlb->segfault_addr;
+        cpu->segfault_was_write = false;
+        return INT_GPF;
+    }
+    if (funct3 <= 3)
+        value = rv_gadget_sign_extend(value, size * CHAR_BIT);
+    if (rd != 0)
+        cpu->x[rd] = value;
+    return INT_NONE;
+}
+
+int rv_gadget_store_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, unsigned funct3, uint64_t value) {
+    unsigned size;
+    switch (funct3) {
+    case 0: size = 1; break;
+    case 1: size = 2; break;
+    case 2: size = 4; break;
+    case 3: size = 8; break;
+    default: return INT_UNDEFINED;
+    }
+    if (!tlb_write(tlb, addr, &value, size)) {
+        cpu->segfault_addr = tlb->segfault_addr;
+        cpu->segfault_was_write = true;
+        return INT_GPF;
+    }
+    return INT_NONE;
+}
 
 enum rv_block_marker {
     RV_BLOCK_INSN = 0x52564900u,
@@ -123,6 +173,37 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         gen(state, state->orig_ip + insn->length);
         return true;
     }
+    case RV_OP_LOAD:
+        switch (insn->funct3) {
+        case 0: break;
+        case 1: break;
+        case 2: break;
+        case 3: break;
+        case 4: break;
+        case 5: break;
+        case 6: break;
+        default: break;
+        }
+        if (gadget != NULL)
+            goto gen_imm;
+        break;
+    case RV_OP_STORE:
+        switch (insn->funct3) {
+        case 0: { extern void gadget_rv_sb(void); gadget = gadget_rv_sb; break; }
+        case 1: { extern void gadget_rv_sh(void); gadget = gadget_rv_sh; break; }
+        case 2: { extern void gadget_rv_sw(void); gadget = gadget_rv_sw; break; }
+        case 3: { extern void gadget_rv_sd(void); gadget = gadget_rv_sd; break; }
+        default: break;
+        }
+        if (gadget != NULL) {
+            gen(state, (unsigned long) gadget);
+            gen(state, insn->rs1);
+            gen(state, insn->rs2);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
     case RV_OP_OP_IMM:
         switch (insn->funct3) {
         case 0: { extern void gadget_rv_addi(void); gadget = gadget_rv_addi; break; }

@@ -55,6 +55,8 @@ static struct pt_entry *mem_pt_new(struct mem *mem, page_t page) {
 }
 
 struct pt_entry *mem_pt(struct mem *mem, page_t page) {
+    if (page >= MEM_PAGES)
+        return NULL;
     struct pt_entry *pgdir = mem->pgdir[PGDIR_TOP(page)];
     if (pgdir == NULL)
         return NULL;
