@@ -308,6 +308,21 @@ NAME(fiber_exit):
 .rv_gadget fence
     rv_write_pc_and_continue 1
 
+.rv_gadget csr
+    stp x1, x2, [sp, -0x20]!
+    str lr, [sp, 0x10]
+    mov x0, _cpu
+    ldr x1, [_ip]
+    ldr x2, [_ip, 8]
+    ldr x3, [_ip, 16]
+    ldr x4, [_ip, 24]
+    bl NAME(rv_gadget_csr)
+    ldr lr, [sp, 0x10]
+    ldp x1, x2, [sp], 0x20
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
+    rv_write_pc_and_continue 5
+
 .rv_gadget lb
     ldr x10, [_ip]
     ldr x3, [_ip, 8]

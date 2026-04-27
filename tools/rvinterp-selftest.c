@@ -98,7 +98,9 @@ int main(void) {
     put32(&flat, pc + 60, rv_encode_s(16, 2, 3, 3, 0x27));     // fsd ft2,16(gp)
     put32(&flat, pc + 64, 0x0000000f);                         // fence
     put32(&flat, pc + 68, 0x0000100f);                         // fence.i
-    put32(&flat, pc + 72, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
+    put32(&flat, pc + 72, rv_encode_i(0x003, 7, 5, 28, 0x73)); // csrrwi t3,fcsr,7
+    put32(&flat, pc + 76, rv_encode_i(0x003, 0, 2, 29, 0x73)); // csrrs t4,fcsr,zero
+    put32(&flat, pc + 80, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
     put_double(&flat, 0x380, 1.25);
     put_double(&flat, 0x388, 2.5);
 
@@ -116,7 +118,10 @@ int main(void) {
     assert(cpu.a5 == UINT64_MAX);
     assert(cpu.a6 == UINT64_MAX);
     assert(cpu.a7 == 1);
-    assert(cpu.pc == pc + 76);
+    assert(cpu.x[28] == 0);
+    assert(cpu.x[29] == 7);
+    assert(cpu.fcsr == 7);
+    assert(cpu.pc == pc + 84);
     assert(get64(&flat, 0x300) == 15);
     assert(get_double(&flat, 0x390) == 3.75);
 

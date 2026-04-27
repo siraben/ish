@@ -99,6 +99,71 @@ int rv_gadget_fstore_slow(struct cpu_state *cpu, struct tlb *tlb, addr_t addr, u
     return INT_UNDEFINED;
 }
 
+static bool rv_gadget_read_csr(struct cpu_state *cpu, unsigned csr, uint64_t *value) {
+    switch (csr) {
+    case 0x001:
+        *value = cpu->fcsr & 0x1f;
+        return true;
+    case 0x002:
+        *value = (cpu->fcsr >> 5) & 0x7;
+        return true;
+    case 0x003:
+        *value = cpu->fcsr & 0xff;
+        return true;
+    case 0xc00:
+    case 0xc02:
+        *value = (uint64_t) cpu->cycle;
+        return true;
+    case 0xc01:
+        *value = rdtsc();
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool rv_gadget_write_csr(struct cpu_state *cpu, unsigned csr, uint64_t value) {
+    switch (csr) {
+    case 0x001:
+        cpu->fcsr = (cpu->fcsr & ~0x1fu) | (value & 0x1f);
+        return true;
+    case 0x002:
+        cpu->fcsr = (cpu->fcsr & ~(0x7u << 5)) | ((value & 0x7) << 5);
+        return true;
+    case 0x003:
+        cpu->fcsr = value & 0xff;
+        return true;
+    default:
+        return false;
+    }
+}
+
+int rv_gadget_csr(struct cpu_state *cpu, unsigned funct3, unsigned rd, unsigned rs1, unsigned csr) {
+    uint64_t old;
+    uint64_t csr_arg = funct3 >= 5 ? rs1 : (rs1 == 0 ? 0 : cpu->x[rs1]);
+    if (!rv_gadget_read_csr(cpu, csr, &old))
+        return INT_UNDEFINED;
+    if (rd != 0)
+        cpu->x[rd] = old;
+    switch (funct3) {
+    case 1: case 5:
+        if (!rv_gadget_write_csr(cpu, csr, csr_arg))
+            return INT_UNDEFINED;
+        break;
+    case 2: case 6:
+        if (csr_arg != 0 && !rv_gadget_write_csr(cpu, csr, old | csr_arg))
+            return INT_UNDEFINED;
+        break;
+    case 3: case 7:
+        if (csr_arg != 0 && !rv_gadget_write_csr(cpu, csr, old & ~csr_arg))
+            return INT_UNDEFINED;
+        break;
+    default:
+        return INT_UNDEFINED;
+    }
+    return INT_NONE;
+}
+
 enum rv_block_marker {
     RV_BLOCK_INSN = 0x52564900u,
     RV_BLOCK_EXIT = 0x525649ffu,
@@ -227,6 +292,16 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
         if (insn->funct3 == 0 && insn->imm == 1) {
             extern void gadget_rv_ebreak(void);
             gen(state, (unsigned long) gadget_rv_ebreak);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        if (insn->funct3 != 0) {
+            extern void gadget_rv_csr(void);
+            gen(state, (unsigned long) gadget_rv_csr);
+            gen(state, insn->funct3);
+            gen(state, insn->rd);
+            gen(state, insn->rs1);
+            gen(state, (unsigned long) rv_bits(insn->expanded, 31, 20));
             gen(state, state->orig_ip + insn->length);
             return true;
         }
