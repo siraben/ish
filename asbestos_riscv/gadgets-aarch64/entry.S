@@ -6,6 +6,29 @@
 .equ RV_CPU_pc, 272
 .equ RV_FIBER_BLOCK_code, 192
 
+.macro rv_write_pc_and_continue param_count
+    ldr x3, [_ip, (\param_count - 1) * 8]
+    str x3, [_cpu, RV_CPU_pc]
+    rv_gret \param_count
+.endm
+
+.macro rv_load_x dst, reg
+    cbz \reg, 1f
+    add x7, _cpu, 16
+    ldr \dst, [x7, \reg, lsl 3]
+    b 2f
+1:
+    mov \dst, xzr
+2:
+.endm
+
+.macro rv_store_x src, reg
+    cbz \reg, 1f
+    add x7, _cpu, 16
+    str \src, [x7, \reg, lsl 3]
+1:
+.endm
+
 .global NAME(fiber_enter)
 .type_compat fiber_enter,function
 NAME(fiber_enter):
@@ -66,5 +89,48 @@ NAME(fiber_exit):
     cmp x3, x4
     b.ne NAME(fiber_exit)
     rv_gret 1
+
+.rv_gadget lui
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* imm */
+    rv_store_x x4, x3
+    rv_write_pc_and_continue 3
+
+.rv_gadget auipc
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* imm */
+    ldr x5, [_ip, 16] /* pc */
+    add x4, x4, x5
+    rv_store_x x4, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget addi
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* rs1 */
+    ldr x5, [_ip, 16] /* imm */
+    rv_load_x x6, x4
+    add x6, x6, x5
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget add
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* rs1 */
+    ldr x5, [_ip, 16] /* rs2 */
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    add x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
+
+.rv_gadget sub
+    ldr x3, [_ip]      /* rd */
+    ldr x4, [_ip, 8]  /* rs1 */
+    ldr x5, [_ip, 16] /* rs2 */
+    rv_load_x x6, x4
+    rv_load_x x8, x5
+    sub x6, x6, x8
+    rv_store_x x6, x3
+    rv_write_pc_and_continue 4
 
 # vim: ft=gas

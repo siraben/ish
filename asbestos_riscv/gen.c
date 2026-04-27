@@ -76,6 +76,62 @@ static bool rv_ends_block(const struct rv_insn *insn) {
     }
 }
 
+static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
+    switch (insn->op) {
+    case RV_OP_LUI: {
+        extern void gadget_rv_lui(void);
+        gen(state, (unsigned long) gadget_rv_lui);
+        gen(state, insn->rd);
+        gen(state, (unsigned long) insn->imm);
+        gen(state, state->orig_ip + insn->length);
+        return true;
+    }
+    case RV_OP_AUIPC: {
+        extern void gadget_rv_auipc(void);
+        gen(state, (unsigned long) gadget_rv_auipc);
+        gen(state, insn->rd);
+        gen(state, (unsigned long) insn->imm);
+        gen(state, state->orig_ip);
+        gen(state, state->orig_ip + insn->length);
+        return true;
+    }
+    case RV_OP_OP_IMM:
+        if (insn->funct3 == 0) {
+            extern void gadget_rv_addi(void);
+            gen(state, (unsigned long) gadget_rv_addi);
+            gen(state, insn->rd);
+            gen(state, insn->rs1);
+            gen(state, (unsigned long) insn->imm);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
+    case RV_OP_OP:
+        if (insn->funct7 == 0x00 && insn->funct3 == 0) {
+            extern void gadget_rv_add(void);
+            gen(state, (unsigned long) gadget_rv_add);
+            gen(state, insn->rd);
+            gen(state, insn->rs1);
+            gen(state, insn->rs2);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        if (insn->funct7 == 0x20 && insn->funct3 == 0) {
+            extern void gadget_rv_sub(void);
+            gen(state, (unsigned long) gadget_rv_sub);
+            gen(state, insn->rd);
+            gen(state, insn->rs1);
+            gen(state, insn->rs2);
+            gen(state, state->orig_ip + insn->length);
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    return false;
+}
+
 int gen_step(struct gen_state *state, struct tlb *tlb) {
     uint8_t bytes[4] = {0};
     state->orig_ip = state->ip;
@@ -101,9 +157,11 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     struct rv_insn insn;
     bool decoded = rv_decode(bytes, length, &insn);
 
-    extern void gadget_rv_exec(void);
-    gen(state, (unsigned long) gadget_rv_exec);
-    gen(state, state->orig_ip + insn.length);
+    if (!decoded || !gen_lowered(state, &insn)) {
+        extern void gadget_rv_exec(void);
+        gen(state, (unsigned long) gadget_rv_exec);
+        gen(state, state->orig_ip + insn.length);
+    }
 
     state->ip += insn.length;
     bool continues = decoded && !rv_ends_block(&insn);
