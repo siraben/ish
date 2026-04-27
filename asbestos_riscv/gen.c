@@ -175,13 +175,13 @@ static bool gen_lowered(struct gen_state *state, const struct rv_insn *insn) {
     }
     case RV_OP_LOAD:
         switch (insn->funct3) {
-        case 0: break;
-        case 1: break;
-        case 2: break;
-        case 3: break;
-        case 4: break;
-        case 5: break;
-        case 6: break;
+        case 0: { extern void gadget_rv_lb(void); gadget = gadget_rv_lb; break; }
+        case 1: { extern void gadget_rv_lh(void); gadget = gadget_rv_lh; break; }
+        case 2: { extern void gadget_rv_lw(void); gadget = gadget_rv_lw; break; }
+        case 3: { extern void gadget_rv_ld(void); gadget = gadget_rv_ld; break; }
+        case 4: { extern void gadget_rv_lbu(void); gadget = gadget_rv_lbu; break; }
+        case 5: { extern void gadget_rv_lhu(void); gadget = gadget_rv_lhu; break; }
+        case 6: { extern void gadget_rv_lwu(void); gadget = gadget_rv_lwu; break; }
         default: break;
         }
         if (gadget != NULL)

@@ -93,7 +93,8 @@
     bl NAME(rv_gadget_load_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
-    cbnz x0, NAME(fiber_exit)
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
 .endm
 
@@ -109,7 +110,8 @@
     bl NAME(rv_gadget_store_slow)
     ldr lr, [sp, 0x10]
     ldp x1, x2, [sp], 0x20
-    cbnz x0, NAME(fiber_exit)
+    cmp w0, INT_NONE
+    b.ne NAME(fiber_exit)
     rv_write_pc_and_continue 4
 .endm
 
