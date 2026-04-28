@@ -1,0 +1,2 @@
+cmpxchg_reg ok
+shufps_alias ok

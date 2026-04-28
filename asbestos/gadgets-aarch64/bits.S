@@ -146,12 +146,14 @@
     .macro x name, reg
         .gadget \op\()_\arg\()32_\name
             .ifc \arg,imm
-                ldrb w8, [_ip]
+                ldrb w11, [_ip]
             .else
-                uxtb w8, ecx
+                uxtb w11, ecx
             .endif
-            tst w8, 31
-            b.eq 1f
+            and w11, w11, 31
+            cbz w11, 1f
+            ubfx w12, _tmp, 31, 1
+            mov w8, w11
             mov w9, 32
             sub w9, w9, w8
             sub w8, w8, 1 /* shift by one less */
@@ -169,6 +171,12 @@
                 lsr w9, \reg, w9
             .endif
             orr _tmp, w8, w9
+            cmp w11, 1
+            b.ne 2f
+            ubfx w13, _tmp, 31, 1
+            eor w13, w13, w12
+            strb w13, [_cpu, CPU_of]
+        2:
             strb w10, [_cpu, CPU_cf]
             setf_zsp
         1:

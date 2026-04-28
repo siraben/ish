@@ -55,6 +55,8 @@ static struct pt_entry *mem_pt_new(struct mem *mem, page_t page) {
 }
 
 struct pt_entry *mem_pt(struct mem *mem, page_t page) {
+    if (page >= MEM_PAGES)
+        return NULL;
     struct pt_entry *pgdir = mem->pgdir[PGDIR_TOP(page)];
     if (pgdir == NULL)
         return NULL;
@@ -81,7 +83,15 @@ void mem_next_page(struct mem *mem, page_t *page) {
 page_t pt_find_hole(struct mem *mem, pages_t size) {
     page_t hole_end = 0; // this can never be used before initializing but gcc doesn't realize
     bool in_hole = false;
-    for (page_t page = 0xf7ffd; page > 0x40000; page--) {
+#if GUEST_RISCV64
+    // Keep automatic mappings below bit 31 while the RV64 port still uses a
+    // 32-bit-sized guest address space. Some libc allocator paths use word
+    // operations internally and must not see mmap pointers that sign-extend.
+    const page_t mmap_top = 0x7fffd;
+#else
+    const page_t mmap_top = 0xf7ffd;
+#endif
+    for (page_t page = mmap_top; page > 0x40000; page--) {
         // I don't know how this works but it does
         if (!in_hole && mem_pt(mem, page) == NULL) {
             in_hole = true;
@@ -276,15 +286,22 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
         asbestos_invalidate_page(mem->mmu.asbestos, page);
         // if page is cow, ~~milk~~ copy it
         if (entry->flags & P_COW) {
-            void *data = (char *) entry->data->data + entry->offset;
-            void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-
             // copy/paste from above
             read_wrunlock(&mem->lock);
             write_wrlock(&mem->lock);
-            memcpy(copy, data, PAGE_SIZE);
-            pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
+            entry = mem_pt(mem, page);
+            if (entry != NULL && (entry->flags & P_COW)) {
+                void *data = (char *) entry->data->data + entry->offset;
+                void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+                if (copy == MAP_FAILED) {
+                    write_wrunlock(&mem->lock);
+                    read_wrlock(&mem->lock);
+                    return NULL;
+                }
+                memcpy(copy, data, PAGE_SIZE);
+                pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
+            }
             write_wrunlock(&mem->lock);
             read_wrlock(&mem->lock);
         }

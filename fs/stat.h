@@ -78,6 +78,31 @@ struct newstat64 {
     qword_t ino;
 } __attribute__((packed));
 
+#if GUEST_RISCV64
+struct rv64_stat {
+    qword_t dev;
+    qword_t ino;
+    dword_t mode;
+    dword_t nlink;
+    dword_t uid;
+    dword_t gid;
+    qword_t rdev;
+    qword_t _pad1;
+    sqword_t size;
+    sdword_t blksize;
+    sdword_t _pad2;
+    sqword_t blocks;
+    sqword_t atime;
+    qword_t atime_nsec;
+    sqword_t mtime;
+    qword_t mtime_nsec;
+    sqword_t ctime;
+    qword_t ctime_nsec;
+    dword_t _unused4;
+    dword_t _unused5;
+};
+#endif
+
 struct statfsbuf {
     long type;
     long bsize;

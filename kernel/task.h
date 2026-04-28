@@ -2,7 +2,11 @@
 #define TASK_H
 
 #include <pthread.h>
+#if GUEST_RISCV64
+#include "emu_riscv/cpu.h"
+#else
 #include "emu/cpu.h"
+#endif
 #include "kernel/mm.h"
 #include "kernel/fs.h"
 #include "kernel/signal.h"
@@ -26,6 +30,7 @@ struct task {
     pid_t_ pid, tgid; // immutable
     uid_t_ uid, gid;
     uid_t_ euid, egid;
+    uid_t_ fsuid, fsgid;
     uid_t_ suid, sgid;
 #define MAX_GROUPS 32
     unsigned ngroups;
@@ -63,6 +68,8 @@ struct task {
     struct task *parent;
     struct list children;
     struct list siblings;
+    int parent_death_signal;
+    bool no_new_privs;
 
     addr_t clear_tid;
     addr_t robust_list;
@@ -85,6 +92,10 @@ struct task {
     lock_t general_lock;
 
     struct task_sockrestart sockrestart;
+
+#if GUEST_RISCV64
+    bool force_child_clone_return;
+#endif
 
     // current condition/lock, so it can be notified in case of a signal
     cond_t *waiting_cond;
@@ -189,6 +200,7 @@ struct task *pid_get_task_zombie(dword_t id); // don't return null if the task e
 // TODO document
 void task_start(struct task *task);
 void task_run_current(void);
+pid_t_ task_current_pid(void);
 
 extern void (*exit_hook)(struct task *task, int code);
 

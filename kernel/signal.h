@@ -18,10 +18,18 @@ typedef qword_t sigset_t_;
 
 struct sigaction_ {
     addr_t handler;
+#if GUEST_RISCV64
+    qword_t flags;
+#else
     dword_t flags;
+#endif
     addr_t restorer;
     sigset_t_ mask;
+#if GUEST_RISCV64
+};
+#else
 } __attribute__((packed));
+#endif
 
 #define NUM_SIGS 64
 
@@ -140,7 +148,7 @@ struct sighand {
     atomic_uint refcount;
     struct sigaction_ action[NUM_SIGS];
     addr_t altstack;
-    dword_t altstack_size;
+    addr_t altstack_size;
     lock_t lock;
 };
 struct sighand *sighand_new(void);
@@ -177,7 +185,12 @@ static inline void sigset_del(sigset_t_ *set, int sig) {
 struct stack_t_ {
     addr_t stack;
     dword_t flags;
+#if GUEST_RISCV64
+    dword_t _pad;
+    qword_t size;
+#else
     dword_t size;
+#endif
 };
 #define SS_ONSTACK_ 1
 #define SS_DISABLE_ 2

@@ -194,7 +194,7 @@
     err = do_execve(command[0].UTF8String, command.count, argv, envp);
     if (err < 0)
         return err;
-    self.sessionPid = current->pid;
+    self.sessionPid = task_current_pid();
     task_start(current);
 #else
     const char *argv_arr[command.count + 1];
@@ -514,6 +514,7 @@
 - (void)setTerminal:(Terminal *)terminal {
     _terminal = terminal;
     self.termView.terminal = self.terminal;
+    (void) self.terminal.webView;
 }
 
 - (void)setSessionTerminal:(Terminal *)sessionTerminal {

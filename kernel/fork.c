@@ -56,7 +56,11 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
 static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid_addr, addr_t tls_addr, addr_t ctid_addr) {
     task->vfork = NULL;
     if (stack != 0)
+#if GUEST_RISCV64
+        task->cpu.sp = stack;
+#else
         task->cpu.esp = stack;
+#endif
 
     int err;
     struct mm *mm = task->mm;
@@ -95,6 +99,11 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
 
     struct tgroup *old_group = task->group;
     lock(&pids_lock);
+    if ((flags & (CLONE_THREAD_ | CLONE_PARENT_)) && current->parent != NULL) {
+        list_remove(&task->siblings);
+        task->parent = current->parent;
+        list_add(&task->parent->children, &task->siblings);
+    }
     lock(&old_group->lock);
     if (!(flags & CLONE_THREAD_)) {
         task->group = tgroup_copy(old_group);
@@ -161,7 +170,12 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
         unlock(&pids_lock);
         return err;
     }
+#if GUEST_RISCV64
+    task->cpu.a0 = 0;
+    task->force_child_clone_return = true;
+#else
     task->cpu.eax = 0;
+#endif
 
     struct vfork_info vfork;
     if (flags & CLONE_VFORK_) {

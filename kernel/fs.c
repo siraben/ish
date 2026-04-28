@@ -1,4 +1,5 @@
 #include "debug.h"
+#include <limits.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "kernel/calls.h"
@@ -26,9 +27,9 @@ int access_check(struct statbuf *stat, int check) {
     if (superuser()) return 0;
     if (check == 0) return 0;
     // Align check with the correct bits in mode
-    if (current->euid == stat->uid) {
+    if (current->fsuid == stat->uid) {
         check <<= 6;
-    } else if (current->egid == stat->gid) {
+    } else if (current->fsgid == stat->gid) {
         check <<= 3;
     }
     if (!(stat->mode & check))
@@ -54,13 +55,13 @@ dword_t sys_faccessat(fd_t at_f, addr_t path_addr, mode_t_ mode, dword_t flags) 
     if (flags & AT_EACCESS_)
         return generic_accessat(at, path, mode);
 
-    uid_t_ uid_tmp = current->euid;
-    uid_t_ gid_tmp = current->egid;
-    current->euid = current->uid;
-    current->egid = current->gid;
+    uid_t_ uid_tmp = current->fsuid;
+    uid_t_ gid_tmp = current->fsgid;
+    current->fsuid = current->uid;
+    current->fsgid = current->gid;
     int err = generic_accessat(at, path, mode);
-    current->euid = uid_tmp;
-    current->egid = gid_tmp;
+    current->fsuid = uid_tmp;
+    current->fsgid = gid_tmp;
     return err;
 }
 
@@ -77,6 +78,38 @@ fd_t sys_openat(fd_t at_f, addr_t path_addr, dword_t flags, mode_t_ mode) {
     if (at == NULL)
         return _EBADF;
     struct fd *fd = generic_openat(at, path, flags, mode);
+    if (IS_ERR(fd))
+        return PTR_ERR(fd);
+    return f_install(fd, flags);
+}
+
+struct open_how_ {
+    qword_t flags;
+    qword_t mode;
+    qword_t resolve;
+};
+
+fd_t sys_openat2(fd_t at_f, addr_t path_addr, addr_t how_addr, dword_t size) {
+    struct open_how_ how = {};
+    if (size < sizeof(how))
+        return _EINVAL;
+    if (user_read(how_addr, &how, sizeof(how)))
+        return _EFAULT;
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    STRACE("openat2(%d, \"%s\", flags=0x%llx, mode=0x%llx, resolve=0x%llx, size=%u)",
+            at_f, path, how.flags, how.mode, how.resolve, size);
+    if ((how.flags >> 32) != 0 || (how.mode >> 32) != 0)
+        return _EINVAL;
+    mode_t_ mode = how.mode;
+    dword_t flags = how.flags;
+    if (flags & O_CREAT_)
+        apply_umask(&mode);
+    struct fd *at = at_fd(at_f);
+    if (at == NULL)
+        return _EBADF;
+    struct fd *fd = generic_openat_resolve(at, path, flags, mode, how.resolve);
     if (IS_ERR(fd))
         return PTR_ERR(fd);
     return f_install(fd, flags);
@@ -295,10 +328,14 @@ out:
 // that yet because it's more work and the efficiency gain from that is dwarfed
 // by the inefficiency of the emulator.
 
+#define GUEST_IOV_MAX 1024
+
 static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
-    dword_t iovec_size = sizeof(struct iovec_) * iovec_count;
+    if (iovec_count > GUEST_IOV_MAX)
+        return ERR_PTR(_EINVAL);
+    size_t iovec_size = sizeof(struct iovec_) * iovec_count;
     struct iovec_ *iovec = malloc(iovec_size);
-    if (iovec == NULL)
+    if (iovec == NULL && iovec_size != 0)
         return ERR_PTR(_ENOMEM);
     if (user_read(iovec_addr, iovec, iovec_size)) {
         free(iovec);
@@ -309,8 +346,11 @@ static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
 
 static ssize_t iovec_size(struct iovec_ *iovec, unsigned iovec_count) {
     size_t size = 0;
-    for (unsigned i = 0; i < iovec_count; i++)
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > SSIZE_MAX || size > SSIZE_MAX - (size_t) iovec[i].len)
+            return _EINVAL;
         size += iovec[i].len;
+    }
     return size;
 }
 
@@ -319,7 +359,12 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
-    size_t io_size = iovec_size(iovec, iovec_count);
+    ssize_t io_size_res = iovec_size(iovec, iovec_count);
+    if (io_size_res < 0) {
+        free(iovec);
+        return io_size_res;
+    }
+    size_t io_size = io_size_res;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -333,7 +378,7 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     for (unsigned i = 0; i < iovec_count; i++) {
         size_t print_size = iovec[i].len;
         if (print_size > 100) print_size = 100;
-        STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
+        STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
 
         if (user_write(iovec[i].base, buf + offset, iovec[i].len)) {
             res = _EFAULT;
@@ -353,7 +398,12 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
-    size_t io_size = iovec_size(iovec, iovec_count);
+    ssize_t io_size_res = iovec_size(iovec, iovec_count);
+    if (io_size_res < 0) {
+        free(iovec);
+        return io_size_res;
+    }
+    size_t io_size = io_size_res;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -370,7 +420,7 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
 
         size_t print_size = iovec[i].len;
         if (print_size > 100) print_size = 100;
-        STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
+        STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
         offset += iovec[i].len;
     }
     res = sys_write_buf(fd_no, buf, io_size);
@@ -480,6 +530,62 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     unlock(&fd->lock);
     free(buf);
     return res;
+}
+
+dword_t sys_preadv(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    STRACE("preadv(%d, %#x, %d, %lld)", f, iovec_addr, iovec_count, (long long) off);
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+
+    ssize_t total = 0;
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > UINT32_MAX || off < 0) {
+            total = _EINVAL;
+            break;
+        }
+        dword_t res = sys_pread(f, iovec[i].base, (dword_t) iovec[i].len, off);
+        if ((int_t) res < 0) {
+            if (total == 0)
+                total = (int_t) res;
+            break;
+        }
+        total += res;
+        off += res;
+        if (res < iovec[i].len)
+            break;
+    }
+
+    free(iovec);
+    return total;
+}
+
+dword_t sys_pwritev(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    STRACE("pwritev(%d, %#x, %d, %lld)", f, iovec_addr, iovec_count, (long long) off);
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+
+    ssize_t total = 0;
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > UINT32_MAX || off < 0) {
+            total = _EINVAL;
+            break;
+        }
+        dword_t res = sys_pwrite(f, iovec[i].base, (dword_t) iovec[i].len, off);
+        if ((int_t) res < 0) {
+            if (total == 0)
+                total = (int_t) res;
+            break;
+        }
+        total += res;
+        off += res;
+        if (res < iovec[i].len)
+            break;
+    }
+
+    free(iovec);
+    return total;
 }
 
 static int fd_ioctl(struct fd *fd, dword_t cmd, dword_t arg) {
@@ -812,16 +918,27 @@ dword_t sys_fchmod(fd_t f, dword_t mode) {
     return generic_fsetattr(fd, make_attr(mode, mode));
 }
 
-dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode) {
+dword_t sys_fchmodat2(fd_t at_f, addr_t path_addr, dword_t mode, dword_t flags) {
     char path[MAX_PATH];
     if (user_read_string(path_addr, path, sizeof(path)))
         return _EFAULT;
-    STRACE("fchmodat(%d, \"%s\", %o)", at_f, path, mode);
+    STRACE("fchmodat2(%d, \"%s\", %o, %#x)", at_f, path, mode, flags);
+    if (flags & ~(AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_))
+        return _EINVAL;
+    if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH_))
+            return _ENOENT;
+        return sys_fchmod(at_f, mode);
+    }
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
     mode &= ~S_IFMT;
-    return generic_setattrat(at, path, make_attr(mode, mode), true);
+    return generic_setattrat(at, path, make_attr(mode, mode), !(flags & AT_SYMLINK_NOFOLLOW_));
+}
+
+dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode) {
+    return sys_fchmodat2(at_f, path_addr, mode, 0);
 }
 
 dword_t sys_chmod(addr_t path_addr, dword_t mode) {

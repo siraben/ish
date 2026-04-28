@@ -16,6 +16,7 @@ int_t sys_bind(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len);
 int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len);
 int_t sys_listen(fd_t sock_fd, int_t backlog);
 int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr);
+int_t sys_accept4(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr, int_t flags);
 int_t sys_getsockname(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr);
 int_t sys_getpeername(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr);
 int_t sys_socketpair(dword_t domain, dword_t type, dword_t protocol, addr_t sockets_addr);
@@ -27,6 +28,7 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
 int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags);
 int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags);
 int_t sys_sendmmsg(fd_t sock_fd, addr_t msgvec_addr, uint_t msgvec_len, int_t flags);
+int_t sys_recvmmsg(fd_t sock_fd, addr_t msgvec_addr, uint_t msgvec_len, int_t flags, addr_t timeout_addr);
 
 #define SOCKADDR_DATA_MAX 108
 
@@ -47,21 +49,38 @@ struct msghdr_ {
     addr_t msg_name;
     uint_t msg_namelen;
     addr_t msg_iov;
+#if GUEST_RISCV64
+    qword_t msg_iovlen;
+#else
     uint_t msg_iovlen;
+#endif
     addr_t msg_control;
+#if GUEST_RISCV64
+    qword_t msg_controllen;
+#else
     uint_t msg_controllen;
+#endif
     int_t msg_flags;
 };
 
 struct cmsghdr_ {
+#if GUEST_RISCV64
+    qword_t len;
+#else
     dword_t len;
+#endif
     int_t level;
     int_t type;
     uint8_t data[];
 };
 #define SCM_RIGHTS_ 1
 // copied and ported from musl
-#define CMSG_LEN_(cmsg) (((cmsg)->len + sizeof(dword_t) - 1) & ~(dword_t)(sizeof(dword_t) - 1))
+#if GUEST_RISCV64
+#define CMSG_ALIGN_UNIT_ sizeof(qword_t)
+#else
+#define CMSG_ALIGN_UNIT_ sizeof(dword_t)
+#endif
+#define CMSG_LEN_(cmsg) (((cmsg)->len + CMSG_ALIGN_UNIT_ - 1) & ~(CMSG_ALIGN_UNIT_ - 1))
 #define CMSG_NEXT_(cmsg) ((uint8_t *)(cmsg) + CMSG_LEN_(cmsg))
 #define CMSG_NXTHDR_(cmsg, mhdr_end) ((cmsg)->len < sizeof (struct cmsghdr_) || \
         CMSG_LEN_(cmsg) + sizeof(struct cmsghdr_) >= (size_t) (mhdr_end - (uint8_t *)(cmsg)) \
@@ -141,6 +160,7 @@ static inline int sock_type_to_real(int type, int protocol) {
 #define MSG_DONTWAIT_ 0x40
 #define MSG_EOR_    0x80
 #define MSG_WAITALL_ 0x100
+#define MSG_WAITFORONE_ 0x10000
 
 static inline int sock_flags_to_real(int fake) {
     int real = 0;
@@ -151,7 +171,7 @@ static inline int sock_flags_to_real(int fake) {
     if (fake & MSG_DONTWAIT_) real |= MSG_DONTWAIT;
     if (fake & MSG_EOR_) real |= MSG_EOR;
     if (fake & MSG_WAITALL_) real |= MSG_WAITALL;
-    if (fake & ~(MSG_OOB_|MSG_PEEK_|MSG_CTRUNC_|MSG_TRUNC_|MSG_DONTWAIT_|MSG_EOR_|MSG_WAITALL_))
+    if (fake & ~(MSG_OOB_|MSG_PEEK_|MSG_CTRUNC_|MSG_TRUNC_|MSG_DONTWAIT_|MSG_EOR_|MSG_WAITALL_|MSG_WAITFORONE_))
         TRACE("unimplemented socket flags %d\n", fake);
     return real;
 }
@@ -190,6 +210,7 @@ static inline int sock_flags_from_real(int real) {
 #define IP_HDRINCL_ 3
 #define IP_RETOPTS_ 7
 #define IP_MTU_DISCOVER_ 10
+#define IP_RECVERR_ 11
 #define IP_RECVTTL_ 12
 #define IP_RECVTOS_ 13
 #define TCP_NODELAY_ 1
@@ -197,6 +218,7 @@ static inline int sock_flags_from_real(int real) {
 #define TCP_INFO_ 11
 #define TCP_CONGESTION_ 13
 #define IPV6_UNICAST_HOPS_ 16
+#define IPV6_RECVERR_ 25
 #define IPV6_V6ONLY_ 26
 #define IPV6_TCLASS_ 67
 #define ICMP6_FILTER_ 1

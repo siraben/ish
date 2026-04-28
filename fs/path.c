@@ -77,6 +77,8 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
             if (res >= 0) {
                 mount_release(mount);
+                if (flags & N_SYMLINK_NOFOLLOW_ANY)
+                    return _ELOOP;
                 if (levels >= 5)
                     return _ELOOP;
                 // readlink does not null terminate

@@ -531,8 +531,9 @@ void vec_shuffle_d128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint
         dst->u32[i] = src_copy.u32[(encoding >> (i*2)) % 4];
 }
 void vec_shuffle_ps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t encoding) {
-    dst->u32[0] = dst->u32[(encoding >> 0) & 3];
-    dst->u32[1] = dst->u32[(encoding >> 2) & 3];
+    union xmm_reg dst_copy = *dst;
+    dst->u32[0] = dst_copy.u32[(encoding >> 0) & 3];
+    dst->u32[1] = dst_copy.u32[(encoding >> 2) & 3];
     dst->u32[2] = src->u32[(encoding >> 4) & 3];
     dst->u32[3] = src->u32[(encoding >> 6) & 3];
 }

@@ -103,7 +103,7 @@
     err = do_execve("/sbin/apk", 2, "/sbin/apk\0upgrade\0", "TERM=xterm-256color\0");
     if (err < 0)
         return err;
-    self.upgradePid = current->pid;
+    self.upgradePid = task_current_pid();
     task_start(current);
     current = NULL;
     return 0;

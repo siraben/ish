@@ -1,4 +1,8 @@
+#if GUEST_RISCV64
+#include "emu_riscv/cpu.h"
+#else
 #include "emu/cpu.h"
+#endif
 #include "emu/tlb.h"
 
 void tlb_refresh(struct tlb *tlb, struct mmu *mmu) {

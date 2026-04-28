@@ -31,16 +31,117 @@ bool contains_mount_point(const char *path) {
     return false;
 }
 
-struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
+static bool parse_fd_path(const char *path, fd_t *fd_out) {
+    const char *fd_str = NULL;
+    if (strncmp(path, "/dev/fd/", 8) == 0) {
+        fd_str = path + 8;
+    } else if (strncmp(path, "/proc/self/fd/", 14) == 0) {
+        fd_str = path + 14;
+    } else {
+        return false;
+    }
+
+    if (*fd_str == '\0')
+        return false;
+
+    fd_t fd = 0;
+    for (const char *p = fd_str; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9')
+            return false;
+        fd = fd * 10 + (*p - '0');
+    }
+    *fd_out = fd;
+    return true;
+}
+
+static struct fd *open_fd_path(const char *path) {
+    fd_t fd_no;
+    if (!parse_fd_path(path, &fd_no))
+        return NULL;
+
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return ERR_PTR(_ENOENT);
+    fd_retain(fd);
+    return fd;
+}
+
+static bool path_starts_with_component(const char *path, const char *prefix) {
+    size_t len = strlen(prefix);
+    if (strcmp(prefix, "/") == 0)
+        return path[0] == '/';
+    return strncmp(path, prefix, len) == 0 && (path[len] == '\0' || path[len] == '/');
+}
+
+#define RESOLVE_NO_XDEV_ 0x01
+#define RESOLVE_NO_MAGICLINKS_ 0x02
+#define RESOLVE_NO_SYMLINKS_ 0x04
+#define RESOLVE_BENEATH_ 0x08
+#define RESOLVE_IN_ROOT_ 0x10
+#define RESOLVE_CACHED_ 0x20
+
+struct fd *generic_openat_resolve(struct fd *at, const char *path_raw, int flags, int mode, qword_t resolve) {
+    int err;
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
+    if (resolve & ~(RESOLVE_NO_XDEV_ | RESOLVE_NO_MAGICLINKS_ | RESOLVE_NO_SYMLINKS_ |
+                RESOLVE_BENEATH_ | RESOLVE_IN_ROOT_ | RESOLVE_CACHED_))
+        return ERR_PTR(_EINVAL);
+    if ((resolve & RESOLVE_BENEATH_) && (resolve & RESOLVE_IN_ROOT_))
+        return ERR_PTR(_EINVAL);
+    if (resolve & RESOLVE_CACHED_)
+        return ERR_PTR(_EAGAIN);
+    if ((resolve & RESOLVE_BENEATH_) && path_raw[0] == '/')
+        return ERR_PTR(_EXDEV);
+
+    if (!(resolve & (RESOLVE_NO_MAGICLINKS_ | RESOLVE_NO_SYMLINKS_)) &&
+            (at == AT_PWD || path_raw[0] == '/')) {
+        struct fd *fd = open_fd_path(path_raw);
+        if (fd != NULL)
+            return fd;
+    }
 
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_FOLLOW |
-            (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0));
+    int normalize_flags = flags & O_NOFOLLOW_ ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW;
+    if (resolve & RESOLVE_NO_SYMLINKS_)
+        normalize_flags = N_SYMLINK_NOFOLLOW | N_SYMLINK_NOFOLLOW_ANY;
+    if (flags & O_CREAT_)
+        normalize_flags |= N_PARENT_DIR_WRITE;
+    char beneath[MAX_PATH];
+    if (resolve & (RESOLVE_BENEATH_ | RESOLVE_IN_ROOT_)) {
+        struct fd *base = at;
+        lock(&current->fs->lock);
+        if (base == AT_PWD)
+            base = current->fs->pwd;
+        unlock(&current->fs->lock);
+        err = generic_getpath(base, beneath);
+        if (err < 0)
+            return ERR_PTR(err);
+    }
+    if (resolve & RESOLVE_IN_ROOT_) {
+        // IN_ROOT needs per-component root confinement for absolute paths and
+        // ".."; the generic resolver currently only supports post-resolution
+        // containment checks.
+        return ERR_PTR(_EINVAL);
+    }
+    err = path_normalize(at, path_raw, path, normalize_flags);
     if (err < 0)
         return ERR_PTR(err);
+    if ((resolve & RESOLVE_BENEATH_) && !path_starts_with_component(path, beneath))
+        return ERR_PTR(_EXDEV);
+    if (resolve & RESOLVE_NO_XDEV_) {
+        char base_path[MAX_PATH];
+        if (generic_getpath(at == AT_PWD ? current->fs->pwd : at, base_path) < 0)
+            return ERR_PTR(_EXDEV);
+        struct mount *base_mount = mount_find(base_path);
+        struct mount *target_mount = mount_find(path);
+        bool same_mount = base_mount == target_mount;
+        mount_release(base_mount);
+        mount_release(target_mount);
+        if (!same_mount)
+            return ERR_PTR(_EXDEV);
+    }
     struct mount *mount = find_mount_and_trim_path(path);
     struct fd *fd = mount->fs->open(mount, path, flags, mode);
     if (IS_ERR(fd)) {
@@ -96,6 +197,10 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
 error:
     fd_close(fd);
     return ERR_PTR(err);
+}
+
+struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
+    return generic_openat_resolve(at, path_raw, flags, mode, 0);
 }
 
 struct fd *generic_open(const char *path, int flags, int mode) {

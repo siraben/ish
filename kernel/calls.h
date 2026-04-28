@@ -51,6 +51,7 @@ addr_t sys_brk(addr_t new_brk);
 #define MMAP_ANONYMOUS 0x20
 addr_t sys_mmap(addr_t args_addr);
 addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset);
+addr_t sys_mmap_riscv64(addr_t addr, qword_t len, qword_t prot, qword_t flags, qword_t fd_no, qword_t offset);
 int_t sys_munmap(addr_t addr, uint_t len);
 int_t sys_mprotect(addr_t addr, uint_t len, int_t prot);
 int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags);
@@ -66,7 +67,11 @@ int_t sys_msync(addr_t addr, dword_t len, int_t flags);
 #define LOCK_UN_ 8
 struct iovec_ {
     addr_t base;
+#if GUEST_RISCV64
+    qword_t len;
+#else
     uint_t len;
+#endif
 };
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size);
 dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count);
@@ -76,6 +81,8 @@ dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, 
 dword_t sys_lseek(fd_t f, dword_t off, dword_t whence);
 dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t buf_size, off_t_ off);
 dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off);
+dword_t sys_preadv(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off);
+dword_t sys_pwritev(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off);
 dword_t sys_ioctl(fd_t f, dword_t cmd, dword_t arg);
 dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg);
 dword_t sys_fcntl32(fd_t fd, dword_t cmd, dword_t arg);
@@ -83,6 +90,7 @@ dword_t sys_dup(fd_t fd);
 dword_t sys_dup2(fd_t fd, fd_t new_fd);
 dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags);
 dword_t sys_close(fd_t fd);
+dword_t sys_close_range(dword_t first, dword_t last, dword_t flags);
 dword_t sys_fsync(fd_t f);
 dword_t sys_flock(fd_t fd, dword_t operation);
 int_t sys_pipe(addr_t pipe_addr);
@@ -108,6 +116,7 @@ int_t sys_eventfd(uint_t initval);
 // file management
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode);
 fd_t sys_openat(fd_t at, addr_t path_addr, dword_t flags, mode_t_ mode);
+fd_t sys_openat2(fd_t at, addr_t path_addr, addr_t how_addr, dword_t size);
 dword_t sys_close(fd_t fd);
 dword_t sys_link(addr_t src_addr, addr_t dst_addr);
 dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr);
@@ -133,6 +142,7 @@ dword_t sys_fstat64(fd_t fd_no, addr_t statbuf_addr);
 dword_t sys_fstatat64(fd_t at, addr_t path_addr, addr_t statbuf_addr, dword_t flags);
 dword_t sys_fchmod(fd_t f, dword_t mode);
 dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode);
+dword_t sys_fchmodat2(fd_t at_f, addr_t path_addr, dword_t mode, dword_t flags);
 dword_t sys_chmod(addr_t path_addr, dword_t mode);
 dword_t sys_fchown32(fd_t f, dword_t owner, dword_t group);
 dword_t sys_fchownat(fd_t at_f, addr_t path_addr, dword_t owner, dword_t group, int flags);
@@ -181,9 +191,11 @@ dword_t sys_setpgrp(void);
 uid_t_ sys_getuid32(void);
 uid_t_ sys_getuid(void);
 int_t sys_setuid(uid_t uid);
+int_t sys_setfsuid(uid_t uid);
 uid_t_ sys_geteuid32(void);
 uid_t_ sys_geteuid(void);
 int_t sys_setgid(uid_t gid);
+int_t sys_setfsgid(uid_t gid);
 uid_t_ sys_getgid32(void);
 uid_t_ sys_getgid(void);
 uid_t_ sys_getegid32(void);
@@ -211,7 +223,9 @@ dword_t sys_getsid(void);
 
 int_t sys_sched_yield(void);
 int_t sys_prctl(dword_t option, uint_t arg2, uint_t arg3, uint_t arg4, uint_t arg5);
+int_t sys_seccomp(dword_t op, dword_t flags, addr_t args);
 int_t sys_arch_prctl(int_t code, addr_t addr);
+int_t sys_unshare(dword_t flags);
 int_t sys_reboot(int_t magic, int_t magic2, int_t cmd);
 
 // system information
@@ -254,7 +268,12 @@ int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr);
 dword_t sys_getrandom(addr_t buf_addr, dword_t len, dword_t flags);
 int_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
 int_t sys_ipc(uint_t call, int_t first, int_t second, int_t third, addr_t ptr, int_t fifth);
+int_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t cache_addr);
 
+#if GUEST_RISCV64
+typedef sqword_t (*syscall_t)(qword_t, qword_t, qword_t, qword_t, qword_t, qword_t);
+#else
 typedef int (*syscall_t)(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
+#endif
 
 #endif

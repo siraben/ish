@@ -110,7 +110,7 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
             _webView.inspectable = YES;
         _webView.scrollView.scrollEnabled = NO;
         NSURL *xtermHtmlFile = [NSBundle.mainBundle URLForResource:@"term" withExtension:@"html"];
-        [_webView loadFileURL:xtermHtmlFile allowingReadAccessToURL:xtermHtmlFile];
+        [_webView loadFileURL:xtermHtmlFile allowingReadAccessToURL:NSBundle.mainBundle.resourceURL];
     }
     return _webView;
 }

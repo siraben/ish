@@ -106,6 +106,22 @@ addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_
     return mmap_common(addr, len, prot, flags, fd_no, offset << PAGE_BITS);
 }
 
+addr_t sys_mmap_riscv64(addr_t addr, qword_t len, qword_t prot, qword_t flags, qword_t fd_no, qword_t offset) {
+    STRACE("mmap64(0x%llx, 0x%llx, 0x%llx, 0x%llx, %lld, 0x%llx)",
+            (unsigned long long) addr, (unsigned long long) len,
+            (unsigned long long) prot, (unsigned long long) flags,
+            (long long) fd_no, (unsigned long long) offset);
+    if (len > UINT32_MAX || prot > UINT32_MAX || flags > UINT32_MAX)
+        return _EINVAL;
+    if ((sqword_t) fd_no < INT32_MIN || (sqword_t) fd_no > INT32_MAX)
+        return _EBADF;
+    if (offset > UINT32_MAX) {
+        FIXME("rv64 mmap offset truncated: 0x%llx", (unsigned long long) offset);
+        return _EINVAL;
+    }
+    return mmap_common(addr, (dword_t) len, (dword_t) prot, (dword_t) flags, (fd_t) fd_no, (dword_t) offset);
+}
+
 struct mmap_arg_struct {
     dword_t addr, len, prot, flags, fd, offset;
 };

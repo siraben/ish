@@ -98,9 +98,9 @@ void task_destroy(struct task *task) {
 void task_run_current() {
     struct cpu_state *cpu = &current->cpu;
     struct tlb tlb = {};
-    tlb_refresh(&tlb, &current->mem->mmu);
     while (true) {
         read_wrlock(&current->mem->lock);
+        tlb_refresh(&tlb, &current->mem->mmu);
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
         read_wrunlock(&current->mem->lock);
         handle_interrupt(interrupt);
@@ -109,6 +109,12 @@ void task_run_current() {
 
 static void *task_thread(void *task) {
     current = task;
+#if GUEST_RISCV64
+    if (current->force_child_clone_return) {
+        current->cpu.a0 = 0;
+        current->force_child_clone_return = false;
+    }
+#endif
     update_thread_name();
     task_run_current();
     die("task_thread returned"); // above function call should never return
@@ -123,6 +129,10 @@ __attribute__((constructor)) static void create_attr() {
 void task_start(struct task *task) {
     if (pthread_create(&task->thread, &task_thread_attr, task_thread, task) < 0)
         die("could not create thread");
+}
+
+pid_t_ task_current_pid(void) {
+    return current->pid;
 }
 
 int_t sys_sched_yield() {

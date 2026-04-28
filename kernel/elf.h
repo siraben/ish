@@ -12,6 +12,7 @@
 #define ELF_EXECUTABLE 2
 #define ELF_DYNAMIC 3
 #define ELF_X86 3
+#define ELF_RISCV 243
 
 struct elf_header {
     uint32_t magic;
@@ -24,9 +25,9 @@ struct elf_header {
     uint16_t type; // library or executable or what
     uint16_t machine;
     uint32_t elfversion2;
-    dword_t entry_point;
-    dword_t prghead_off;
-    dword_t secthead_off;
+    addr_t entry_point;
+    addr_t prghead_off;
+    addr_t secthead_off;
     uint32_t flags;
     uint16_t header_size;
     uint16_t phent_size;
@@ -48,6 +49,15 @@ struct elf_header {
 
 struct prg_header {
     uint32_t type;
+#if GUEST_RISCV64
+    uint32_t flags;
+    addr_t offset;
+    addr_t vaddr;
+    addr_t paddr;
+    addr_t filesize;
+    addr_t memsize;
+    addr_t alignment; // must be power of 2
+#else
     dword_t offset;
     dword_t vaddr;
     dword_t paddr;
@@ -55,6 +65,7 @@ struct prg_header {
     dword_t memsize;
     uint32_t flags;
     dword_t alignment; // must be power of 2
+#endif
 };
 
 #define PH_R (1 << 2)
@@ -62,8 +73,8 @@ struct prg_header {
 #define PH_X (1 << 0)
 
 struct aux_ent {
-    uint32_t type;
-    uint32_t value;
+    addr_t type;
+    addr_t value;
 };
 
 #define AX_PHDR 3

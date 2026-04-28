@@ -6,6 +6,7 @@
 #define N_SYMLINK_FOLLOW 1
 #define N_SYMLINK_NOFOLLOW 2
 #define N_PARENT_DIR_WRITE 4
+#define N_SYMLINK_NOFOLLOW_ANY 8
 
 // Normalizes the path specified and writes the result into the out buffer.
 //

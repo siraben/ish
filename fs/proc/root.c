@@ -29,7 +29,13 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
     for (unsigned i = 0; i < cpus; i++) {
         proc_printf(buf, "processor\t: %u\n", i);
+#if GUEST_RISCV64
+        proc_printf(buf, "hart\t\t: %u\n", i);
+        proc_printf(buf, "isa\t\t: rv64imafdc\n");
+        proc_printf(buf, "mmu\t\t: sv39\n");
+#else
         proc_printf(buf, "vendor_id\t: iSH\n");
+#endif
         proc_printf(buf, "\n");
     }
     return 0;

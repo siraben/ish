@@ -49,7 +49,16 @@ int_t sys_setuid(uid_t_ uid) {
             return _EPERM;
     }
     current->euid = uid;
+    current->fsuid = uid;
     return 0;
+}
+
+int_t sys_setfsuid(uid_t_ uid) {
+    STRACE("setfsuid(%d)", uid);
+    uid_t_ old = current->fsuid;
+    if (superuser() || uid == current->uid || uid == current->euid || uid == current->suid || uid == current->fsuid)
+        current->fsuid = uid;
+    return old;
 }
 
 dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
@@ -65,8 +74,10 @@ dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
 
     if (ruid != (uid_t) -1)
         current->uid = ruid;
-    if (euid != (uid_t) -1)
+    if (euid != (uid_t) -1) {
         current->euid = euid;
+        current->fsuid = euid;
+    }
     if (suid != (uid_t) -1)
         current->suid = suid;
     return 0;
@@ -114,7 +125,16 @@ int_t sys_setgid(uid_t_ gid) {
             return _EPERM;
     }
     current->egid = gid;
+    current->fsgid = gid;
     return 0;
+}
+
+int_t sys_setfsgid(uid_t_ gid) {
+    STRACE("setfsgid(%d)", gid);
+    uid_t_ old = current->fsgid;
+    if (superuser() || gid == current->gid || gid == current->egid || gid == current->sgid || gid == current->fsgid)
+        current->fsgid = gid;
+    return old;
 }
 
 dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid) {
@@ -130,8 +150,10 @@ dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid) {
 
     if (rgid != (uid_t) -1)
         current->gid = rgid;
-    if (egid != (uid_t) -1)
+    if (egid != (uid_t) -1) {
         current->egid = egid;
+        current->fsgid = egid;
+    }
     if (sgid != (uid_t) -1)
         current->sgid = sgid;
     return 0;

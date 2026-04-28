@@ -4,6 +4,7 @@ xcuserdata/
 
 cross-*.txt
 root.tar.gz
+roots/
 
 node_modules
 app/xtermjs/xterm-dist
@@ -18,3 +19,4 @@ fastlane/screenshots
 fastlane/test_output
 
 e2e_out/
+.rv64-rootfs-cache/

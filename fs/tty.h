@@ -105,6 +105,7 @@ extern struct tty_driver real_tty_driver;
 
 struct tty {
     unsigned refcount;
+    unsigned file_refs;
     struct tty_driver *driver;
     bool hung_up;
     bool ever_opened;
