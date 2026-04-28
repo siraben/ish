@@ -91,15 +91,14 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
     uint64_t rs2_value = rs2 == 0 ? 0 : cpu->x[rs2];
     uint64_t result = rs2_value;
     bool should_store = true;
+    uint64_t rd_value = loaded;
+    bool write_rd = rd != 0;
     if (funct5 == 0x03) {
         should_store = cpu->reservation_valid && cpu->reservation_addr == addr &&
             rv_reservation_matches(cpu, addr, loaded);
         cpu->reservation_valid = false;
-        if (rd != 0)
-            cpu->x[rd] = should_store ? 0 : 1;
+        rd_value = should_store ? 0 : 1;
     } else {
-        if (rd != 0)
-            cpu->x[rd] = loaded;
         switch (funct5) {
         case 0x00: result = loaded + rs2_value; break;
         case 0x01: result = rs2_value; break;
@@ -123,6 +122,8 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
             return INT_GPF;
         }
     }
+    if (write_rd)
+        cpu->x[rd] = rd_value;
     rv_atomic_unlock();
     return INT_NONE;
 }

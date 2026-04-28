@@ -210,24 +210,26 @@ static bool exec_amo(struct cpu_state *cpu, struct tlb *tlb, struct rv_insn *ins
 
     uint64_t result = load_reg(cpu, insn->rs2);
     bool should_store = true;
+    uint64_t rd_value = loaded;
+    bool write_rd = insn->rd != 0;
     if (funct5 == 0x03) {
         should_store = cpu->reservation_valid && cpu->reservation_addr == addr &&
             rv_reservation_matches(cpu, addr, loaded);
         result = load_reg(cpu, insn->rs2);
         cpu->reservation_valid = false;
-        store_reg(cpu, insn->rd, should_store ? 0 : 1);
+        rd_value = should_store ? 0 : 1;
     } else {
-        store_reg(cpu, insn->rd, loaded);
+        uint64_t rs2 = load_reg(cpu, insn->rs2);
         switch (funct5) {
-        case 0x00: result = loaded + load_reg(cpu, insn->rs2); break;
-        case 0x01: result = load_reg(cpu, insn->rs2); break;
-        case 0x04: result = loaded ^ load_reg(cpu, insn->rs2); break;
-        case 0x08: result = loaded | load_reg(cpu, insn->rs2); break;
-        case 0x0c: result = loaded & load_reg(cpu, insn->rs2); break;
-        case 0x10: result = (int64_t) loaded < (int64_t) load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
-        case 0x14: result = (int64_t) loaded > (int64_t) load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
-        case 0x18: result = loaded < load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
-        case 0x1c: result = loaded > load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
+        case 0x00: result = loaded + rs2; break;
+        case 0x01: result = rs2; break;
+        case 0x04: result = loaded ^ rs2; break;
+        case 0x08: result = loaded | rs2; break;
+        case 0x0c: result = loaded & rs2; break;
+        case 0x10: result = (int64_t) loaded < (int64_t) rs2 ? loaded : rs2; break;
+        case 0x14: result = (int64_t) loaded > (int64_t) rs2 ? loaded : rs2; break;
+        case 0x18: result = loaded < rs2 ? loaded : rs2; break;
+        case 0x1c: result = loaded > rs2 ? loaded : rs2; break;
         default:
             rv_atomic_unlock();
             return false;
@@ -241,6 +243,8 @@ static bool exec_amo(struct cpu_state *cpu, struct tlb *tlb, struct rv_insn *ins
             return false;
         }
     }
+    if (write_rd)
+        store_reg(cpu, insn->rd, rd_value);
     rv_atomic_unlock();
     return true;
 }
