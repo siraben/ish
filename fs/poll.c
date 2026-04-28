@@ -211,18 +211,7 @@ void poll_wakeup(struct fd *fd, int events) {
 
 int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struct timespec *timeout) {
     lock(&poll_->lock);
-
-    // acquire the pipe
-    if (poll_->waiters++ == 0) {
-        assert(poll_->notify_pipe[0] == -1 && poll_->notify_pipe[1] == -1);
-        if (pipe(poll_->notify_pipe) < 0) {
-            unlock(&poll_->lock);
-            return errno_map();
-        }
-        fcntl(poll_->notify_pipe[0], F_SETFL, O_NONBLOCK);
-        fcntl(poll_->notify_pipe[1], F_SETFL, O_NONBLOCK);
-        real_poll_update(&poll_->real, poll_->notify_pipe[0], POLL_READ, NULL);
-    }
+    bool acquired_notify_pipe = false;
 
     // TODO this is pretty broken with regards to timeouts
     int res = 0;
@@ -273,6 +262,20 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         }
 
         // wait for a ready notification
+        if (!acquired_notify_pipe) {
+            if (poll_->waiters++ == 0) {
+                assert(poll_->notify_pipe[0] == -1 && poll_->notify_pipe[1] == -1);
+                if (pipe(poll_->notify_pipe) < 0) {
+                    poll_->waiters--;
+                    res = errno_map();
+                    break;
+                }
+                fcntl(poll_->notify_pipe[0], F_SETFL, O_NONBLOCK);
+                fcntl(poll_->notify_pipe[1], F_SETFL, O_NONBLOCK);
+                real_poll_update(&poll_->real, poll_->notify_pipe[0], POLL_READ, NULL);
+            }
+            acquired_notify_pipe = true;
+        }
         list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
             sockrestart_begin_listen_wait(poll_fd->fd);
         }
@@ -313,7 +316,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
     }
 
     // release the pipe
-    if (--poll_->waiters == 0) {
+    if (acquired_notify_pipe && --poll_->waiters == 0) {
         close(poll_->notify_pipe[0]);
         close(poll_->notify_pipe[1]);
         poll_->notify_pipe[0] = -1;
@@ -437,4 +440,3 @@ static int rpe_events(struct real_poll_event *rpe) {
 static void real_poll_close(struct real_poll *real) {
     close(real->fd);
 }
-

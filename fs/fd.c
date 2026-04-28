@@ -327,6 +327,27 @@ int fd_setflags(struct fd *fd, int flags) {
 
 dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
     struct fdtable *table = current->files;
+    if (cmd == F_GETFD_ || cmd == F_SETFD_) {
+        lock(&table->lock);
+        if (fdtable_get(table, f) == NULL) {
+            unlock(&table->lock);
+            return _EBADF;
+        }
+        if (cmd == F_GETFD_) {
+            STRACE("fcntl(%d, F_GETFD)", f);
+            int flags = bit_test(f, table->cloexec);
+            unlock(&table->lock);
+            return flags;
+        }
+        STRACE("fcntl(%d, F_SETFD, 0x%x)", f, arg);
+        if (arg & 1)
+            bit_set(f, table->cloexec);
+        else
+            bit_clear(f, table->cloexec);
+        unlock(&table->lock);
+        return 0;
+    }
+
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
@@ -344,19 +365,9 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
             STRACE("fcntl(%d, F_DUPFD_CLOEXEC, %d)", f, arg);
             fd->refcount++;
             new_f = f_install_start(fd, arg);
-            bit_set(new_f, table->cloexec);
+            if (new_f >= 0)
+                bit_set(new_f, table->cloexec);
             return new_f;
-
-        case F_GETFD_:
-            STRACE("fcntl(%d, F_GETFD)", f);
-            return bit_test(f, table->cloexec);
-        case F_SETFD_:
-            STRACE("fcntl(%d, F_SETFD, 0x%x)", f, arg);
-            if (arg & 1)
-                bit_set(f, table->cloexec);
-            else
-                bit_clear(f, table->cloexec);
-            return 0;
 
         case F_GETFL_:
             STRACE("fcntl(%d, F_GETFL)", f);
