@@ -287,6 +287,7 @@ RV_WRAP4(sys_pwritev, fd_t, addr_t, dword_t, off_t_)
 RV_WRAP4(sys_sendfile64, fd_t, fd_t, addr_t, dword_t)
 RV_WRAP6(sys_pselect, fd_t, addr_t, addr_t, addr_t, addr_t, addr_t)
 RV_WRAP5(sys_ppoll, addr_t, dword_t, addr_t, addr_t, dword_t)
+RV_WRAP4(sys_signalfd4, fd_t, addr_t, dword_t, int_t)
 RV_WRAP6(sys_splice, fd_t, addr_t, fd_t, addr_t, dword_t, dword_t)
 RV_WRAP4(sys_readlinkat, fd_t, addr_t, addr_t, dword_t)
 RV_WRAP4(sys_fstatat64, fd_t, addr_t, addr_t, dword_t)
@@ -481,7 +482,7 @@ syscall_t syscall_table[] = {
     [71]  = rv_sys_sendfile64,
     [72]  = rv_sys_pselect,
     [73]  = rv_sys_ppoll,
-    [74]  = rv_stub, // signalfd needs queued signal delivery semantics.
+    [74]  = rv_sys_signalfd4,
     [75]  = rv_stub, // vmsplice needs host pipe page donation.
     [76]  = rv_sys_splice,
     [77]  = rv_stub, // tee needs pipe buffer sharing.

@@ -106,6 +106,8 @@ page_t pt_find_hole(struct mem *mem, pages_t size) {
 }
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
+    if (pages > MEM_PAGES || start > MEM_PAGES - pages)
+        return false;
     for (page_t page = start; page < start + pages; page++) {
         if (mem_pt(mem, page) != NULL)
             return false;
@@ -116,6 +118,8 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags) {
     if (memory == MAP_FAILED)
         return errno_map();
+    if (pages > MEM_PAGES || start > MEM_PAGES - pages)
+        return _ENOMEM;
 
     // If this fails, the munmap in pt_unmap would probably fail.
     assert((uintptr_t) memory % real_page_size == 0 || memory == vdso_data);

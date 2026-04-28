@@ -47,20 +47,30 @@ void mm_release(struct mm *mm) {
     }
 }
 
+static bool mmap_range_valid(page_t page, pages_t pages) {
+    return pages <= MEM_PAGES && page <= MEM_PAGES - pages;
+}
+
 static addr_t do_mmap(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
     int err;
     pages_t pages = PAGE_ROUND_UP(len);
     if (!pages) return _EINVAL;
     page_t page;
-    if (addr != 0) {
+    bool fixed = flags & (MMAP_FIXED | MMAP_FIXED_NOREPLACE);
+    if (addr != 0 || fixed) {
         if (PGOFFSET(addr) != 0)
             return _EINVAL;
         page = PAGE(addr);
-        if (!(flags & MMAP_FIXED) && !pt_is_hole(current->mem, page, pages)) {
+        bool valid = mmap_range_valid(page, pages);
+        if (fixed && !valid)
+            return _ENOMEM;
+        if (fixed && (flags & MMAP_FIXED_NOREPLACE) && !pt_is_hole(current->mem, page, pages))
+            return _EEXIST;
+        if (!fixed && (!valid || !pt_is_hole(current->mem, page, pages))) {
             addr = 0;
         }
     }
-    if (addr == 0) {
+    if (addr == 0 && !fixed) {
         page = pt_find_hole(current->mem, pages);
         if (page == BAD_PAGE)
             return _ENOMEM;

@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <sys/uio.h>
 #include "kernel/memory.h"
+#include "kernel/signal.h"
 #include "util/list.h"
 #include "util/sync.h"
 #include "util/bits.h"
@@ -41,6 +42,9 @@ struct fd {
             struct timer *timer;
             uint64_t expirations;
         } timerfd;
+        struct {
+            sigset_t_ mask;
+        } signalfd;
         struct {
             int domain;
             int type;

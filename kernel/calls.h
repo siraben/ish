@@ -50,6 +50,7 @@ addr_t sys_brk(addr_t new_brk);
 #define MMAP_PRIVATE 0x2
 #define MMAP_FIXED 0x10
 #define MMAP_ANONYMOUS 0x20
+#define MMAP_FIXED_NOREPLACE 0x100000
 addr_t sys_mmap(addr_t args_addr);
 addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset);
 addr_t sys_mmap_riscv64(addr_t addr, qword_t len, qword_t prot, qword_t flags, qword_t fd_no, qword_t offset);
@@ -113,6 +114,8 @@ int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t 
 
 int_t sys_eventfd2(uint_t initval, int_t flags);
 int_t sys_eventfd(uint_t initval);
+int_t sys_signalfd4(fd_t f, addr_t mask_addr, dword_t mask_size, int_t flags);
+int_t sys_signalfd(fd_t f, addr_t mask_addr, dword_t mask_size);
 
 // file management
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode);
