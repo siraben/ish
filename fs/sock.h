@@ -48,21 +48,38 @@ struct msghdr_ {
     addr_t msg_name;
     uint_t msg_namelen;
     addr_t msg_iov;
+#if GUEST_RISCV64
+    qword_t msg_iovlen;
+#else
     uint_t msg_iovlen;
+#endif
     addr_t msg_control;
+#if GUEST_RISCV64
+    qword_t msg_controllen;
+#else
     uint_t msg_controllen;
+#endif
     int_t msg_flags;
 };
 
 struct cmsghdr_ {
+#if GUEST_RISCV64
+    qword_t len;
+#else
     dword_t len;
+#endif
     int_t level;
     int_t type;
     uint8_t data[];
 };
 #define SCM_RIGHTS_ 1
 // copied and ported from musl
-#define CMSG_LEN_(cmsg) (((cmsg)->len + sizeof(dword_t) - 1) & ~(dword_t)(sizeof(dword_t) - 1))
+#if GUEST_RISCV64
+#define CMSG_ALIGN_UNIT_ sizeof(qword_t)
+#else
+#define CMSG_ALIGN_UNIT_ sizeof(dword_t)
+#endif
+#define CMSG_LEN_(cmsg) (((cmsg)->len + CMSG_ALIGN_UNIT_ - 1) & ~(CMSG_ALIGN_UNIT_ - 1))
 #define CMSG_NEXT_(cmsg) ((uint8_t *)(cmsg) + CMSG_LEN_(cmsg))
 #define CMSG_NXTHDR_(cmsg, mhdr_end) ((cmsg)->len < sizeof (struct cmsghdr_) || \
         CMSG_LEN_(cmsg) + sizeof(struct cmsghdr_) >= (size_t) (mhdr_end - (uint8_t *)(cmsg)) \

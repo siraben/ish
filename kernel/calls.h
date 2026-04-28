@@ -67,7 +67,11 @@ int_t sys_msync(addr_t addr, dword_t len, int_t flags);
 #define LOCK_UN_ 8
 struct iovec_ {
     addr_t base;
+#if GUEST_RISCV64
+    qword_t len;
+#else
     uint_t len;
+#endif
 };
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size);
 dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count);

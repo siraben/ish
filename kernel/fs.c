@@ -1,4 +1,5 @@
 #include "debug.h"
+#include <limits.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "kernel/calls.h"
@@ -314,10 +315,14 @@ out:
 // that yet because it's more work and the efficiency gain from that is dwarfed
 // by the inefficiency of the emulator.
 
+#define GUEST_IOV_MAX 1024
+
 static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
-    dword_t iovec_size = sizeof(struct iovec_) * iovec_count;
+    if (iovec_count > GUEST_IOV_MAX)
+        return ERR_PTR(_EINVAL);
+    size_t iovec_size = sizeof(struct iovec_) * iovec_count;
     struct iovec_ *iovec = malloc(iovec_size);
-    if (iovec == NULL)
+    if (iovec == NULL && iovec_size != 0)
         return ERR_PTR(_ENOMEM);
     if (user_read(iovec_addr, iovec, iovec_size)) {
         free(iovec);
@@ -328,8 +333,11 @@ static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
 
 static ssize_t iovec_size(struct iovec_ *iovec, unsigned iovec_count) {
     size_t size = 0;
-    for (unsigned i = 0; i < iovec_count; i++)
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > SSIZE_MAX || size > SSIZE_MAX - (size_t) iovec[i].len)
+            return _EINVAL;
         size += iovec[i].len;
+    }
     return size;
 }
 
@@ -338,7 +346,12 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
-    size_t io_size = iovec_size(iovec, iovec_count);
+    ssize_t io_size_res = iovec_size(iovec, iovec_count);
+    if (io_size_res < 0) {
+        free(iovec);
+        return io_size_res;
+    }
+    size_t io_size = io_size_res;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -352,7 +365,7 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     for (unsigned i = 0; i < iovec_count; i++) {
         size_t print_size = iovec[i].len;
         if (print_size > 100) print_size = 100;
-        STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
+        STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
 
         if (user_write(iovec[i].base, buf + offset, iovec[i].len)) {
             res = _EFAULT;
@@ -372,7 +385,12 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
-    size_t io_size = iovec_size(iovec, iovec_count);
+    ssize_t io_size_res = iovec_size(iovec, iovec_count);
+    if (io_size_res < 0) {
+        free(iovec);
+        return io_size_res;
+    }
+    size_t io_size = io_size_res;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -389,7 +407,7 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
 
         size_t print_size = iovec[i].len;
         if (print_size > 100) print_size = 100;
-        STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
+        STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
         offset += iovec[i].len;
     }
     res = sys_write_buf(fd_no, buf, io_size);
