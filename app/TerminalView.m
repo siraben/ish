@@ -16,21 +16,6 @@ struct rowcol {
     int col;
 };
 
-@interface WeakScriptMessageHandler : NSObject <WKScriptMessageHandler>
-@property (weak) id <WKScriptMessageHandler> handler;
-@end
-@implementation WeakScriptMessageHandler
-- (instancetype)initWithHandler:(id <WKScriptMessageHandler>)handler {
-    if (self = [super init]) {
-        self.handler = handler;
-    }
-    return self;
-}
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    [self.handler userContentController:userContentController didReceiveScriptMessage:message];
-}
-@end
-
 @interface TerminalView ()
 
 @property (nonatomic) NSMutableArray<UIKeyCommand *> *keyCommands;
@@ -45,6 +30,7 @@ struct rowcol {
 @property struct rowcol floatingCursor;
 @property CGSize floatingCursorSensitivity;
 @property CGSize actualFloatingCursorSensitivity;
+@property BOOL updatingScrollOffsetFromTerminal;
 
 @end
 
@@ -95,8 +81,6 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink"};
-
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
         [_terminal removeObserver:self forKeyPath:@"loaded"];
@@ -111,45 +95,36 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (void)installTerminalView {
     NSAssert(_terminal.loaded, @"should probably not be installing a non-loaded terminal");
-    UIView *superview = self.terminal.webView.superview;
+    UIView *superview = self.terminal.displayView.superview;
     if (superview != nil) {
         NSAssert(superview == self.scrollbarView, @"installing terminal that is already installed elsewhere");
         return;
     }
 
-    WKWebView *webView = _terminal.webView;
+    GhosttyTerminalDisplay *displayView = _terminal.displayView;
+    displayView.delegate = self;
     _terminal.enableVoiceOverAnnounce = YES;
-    webView.scrollView.scrollEnabled = NO;
-    webView.scrollView.delaysContentTouches = NO;
-    webView.scrollView.canCancelContentTouches = NO;
-    webView.scrollView.panGestureRecognizer.enabled = NO;
-    id <WKScriptMessageHandler> handler = [[WeakScriptMessageHandler alloc] initWithHandler:self];
-    for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
-        [webView.configuration.userContentController addScriptMessageHandler:handler name:HANDLERS[i]];
-    }
-    webView.frame = self.bounds;
-    self.opaque = webView.opaque = NO;
-    webView.backgroundColor = UIColor.clearColor;
-    webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    displayView.frame = self.bounds;
+    self.opaque = displayView.opaque = YES;
+    displayView.backgroundColor = UIColor.clearColor;
+    displayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    self.scrollbarView.contentView = webView;
-    [self.scrollbarView addSubview:webView];
+    self.scrollbarView.contentView = displayView;
+    [self.scrollbarView addSubview:displayView];
 }
 
 - (void)uninstallTerminalView {
     // remove old terminal
-    UIView *superview = _terminal.webView.superview;
+    UIView *superview = _terminal.displayView.superview;
     if (superview != self.scrollbarView) {
         NSAssert(superview == nil, @"uninstalling terminal that is installed elsewhere");
         return;
     }
 
-    [_terminal.webView removeFromSuperview];
+    [_terminal.displayView removeFromSuperview];
     self.scrollbarView.contentView = nil;
-    for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
-        [_terminal.webView.configuration.userContentController removeScriptMessageHandlerForName:HANDLERS[i]];
-    }
     _terminal.enableVoiceOverAnnounce = NO;
+    _terminal.displayView.delegate = _terminal;
 }
 
 #pragma mark Styling
@@ -165,21 +140,15 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     if (self.overrideAppearance != OverrideAppearanceNone) {
         palette = self.overrideAppearance == OverrideAppearanceLight ? prefs.theme.lightPalette : prefs.theme.darkPalette;
     }
-    NSMutableDictionary<NSString *, id> *themeInfo = [@{
-        @"fontFamily": prefs.fontFamily,
-        @"fontSize": @(self.effectiveFontSize),
-        @"foregroundColor": palette.foregroundColor,
-        @"backgroundColor": palette.backgroundColor,
-        @"blinkCursor": @(prefs.blinkCursor),
-        @"cursorShape": prefs.htermCursorShape,
-    } mutableCopy];
-    if (prefs.palette.colorPaletteOverrides) {
-        themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
-    }
-    NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
-    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(id result, NSError *error){
-        [self updateFloatingCursorSensitivity];
-    }];
+    [self.terminal.displayView updateFontFamily:prefs.fontFamily
+                                       fontSize:self.effectiveFontSize
+                                foregroundColor:palette.foregroundColor
+                                backgroundColor:palette.backgroundColor
+                                    cursorColor:palette.cursorColor
+                          colorPaletteOverrides:palette.colorPaletteOverrides
+                                    blinkCursor:prefs.blinkCursor
+                                    cursorShape:prefs.htermCursorShape];
+    [self updateFloatingCursorSensitivity];
 }
 
 - (void)setOverrideFontSize:(CGFloat)overrideFontSize {
@@ -202,8 +171,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (void)setTerminalFocused:(BOOL)terminalFocused {
     _terminalFocused = terminalFocused;
-    NSString *script = terminalFocused ? @"exports.setFocused(true)" : @"exports.setFocused(false)";
-    [self.terminal.webView evaluateJavaScript:script completionHandler:nil];
+    self.terminal.displayView.terminalFocused = terminalFocused;
 }
 
 - (BOOL)becomeFirstResponder {
@@ -248,27 +216,33 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     }
 }
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    if ([message.name isEqualToString:@"syncFocus"]) {
-        self.terminalFocused = self.terminalFocused;
-    } else if ([message.name isEqualToString:@"focus"]) {
-        if (!self.isFirstResponder) {
-            [self becomeFirstResponder];
-        }
-    } else if ([message.name isEqualToString:@"newScrollHeight"]) {
-        self.scrollbarView.contentSize = CGSizeMake(0, [message.body doubleValue]);
-    } else if ([message.name isEqualToString:@"newScrollTop"]) {
-        CGFloat newOffset = [message.body doubleValue];
-        if (self.scrollbarView.contentOffset.y == newOffset)
-            return;
-        [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
-    } else if ([message.name isEqualToString:@"openLink"]) {
-        [UIApplication openURL:message.body];
-    }
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (self.updatingScrollOffsetFromTerminal)
+        return;
+    CGFloat row = scrollView.contentOffset.y / MAX(1, self.terminal.displayView.characterSize.height);
+    [self.terminal.displayView scrollToRowOffset:(NSUInteger) llround(row)];
 }
 
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
+- (void)ghosttyTerminalDisplayDidResize:(GhosttyTerminalDisplay *)display columns:(int)columns rows:(int)rows {
+    [self.terminal ghosttyTerminalDisplayDidResize:display columns:columns rows:rows];
+    [self updateFloatingCursorSensitivity];
+}
+
+- (void)ghosttyTerminalDisplay:(GhosttyTerminalDisplay *)display writePtyBytes:(const uint8_t *)bytes length:(size_t)length {
+    [self.terminal ghosttyTerminalDisplay:display writePtyBytes:bytes length:length];
+}
+
+- (void)ghosttyTerminalDisplayDidUpdateScrollback:(GhosttyTerminalDisplay *)display totalRows:(NSUInteger)totalRows offset:(NSUInteger)offset visibleRows:(NSUInteger)visibleRows {
+    (void) display;
+    CGFloat rowHeight = MAX(1, self.terminal.displayView.characterSize.height);
+    CGSize contentSize = CGSizeMake(0, MAX(self.scrollbarView.bounds.size.height, totalRows * rowHeight));
+    CGPoint contentOffset = CGPointMake(0, offset * rowHeight);
+    self.updatingScrollOffsetFromTerminal = YES;
+    self.scrollbarView.contentSize = contentSize;
+    if (fabs(self.scrollbarView.contentOffset.y - contentOffset.y) >= 1)
+        [self.scrollbarView setContentOffset:contentOffset animated:NO];
+    self.updatingScrollOffsetFromTerminal = NO;
+    (void) visibleRows;
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {
@@ -373,25 +347,19 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 }
 
 - (void)copy:(id)sender {
-    [self.terminal.webView evaluateJavaScript:@"exports.copy()" completionHandler:nil];
+    [self.terminal.displayView copyScreenToPasteboard];
 }
 
 - (void)clearScrollback:(UIKeyCommand *)command {
-    [self.terminal.webView evaluateJavaScript:@"exports.clearScrollback()" completionHandler:nil];
+    [self.terminal.displayView clearScrollback];
 }
 
 #pragma mark Floating cursor
 
 - (void)updateFloatingCursorSensitivity {
-    [self.terminal.webView evaluateJavaScript:@"exports.getCharacterSize()" completionHandler:^(NSArray *charSizeRaw, NSError *error) {
-        if (error != nil) {
-            NSLog(@"error getting character size: %@", error);
-            return;
-        }
-        CGSize charSize = CGSizeMake([charSizeRaw[0] doubleValue], [charSizeRaw[1] doubleValue]);
-        double sensitivity = 0.5;
-        self.floatingCursorSensitivity = CGSizeMake(charSize.width / sensitivity, charSize.height / sensitivity);
-    }];
+    CGSize charSize = self.terminal.displayView.characterSize;
+    double sensitivity = 0.5;
+    self.floatingCursorSensitivity = CGSizeMake(charSize.width / sensitivity, charSize.height / sensitivity);
 }
 
 - (struct rowcol)rowcolFromPoint:(CGPoint)point {

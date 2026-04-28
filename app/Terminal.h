@@ -6,11 +6,11 @@
 //
 
 #import <UIKit/UIKit.h>
-#import <WebKit/WebKit.h>
+#import "GhosttyTerminalDisplay.h"
 
 struct tty;
 
-@interface Terminal : NSObject
+@interface Terminal : NSObject <GhosttyTerminalDisplayDelegate>
 
 + (Terminal *)terminalWithType:(int)type number:(int)number;
 #if !ISH_LINUX
@@ -31,7 +31,7 @@ struct tty;
 // Make this terminal no longer be the singleton terminal with its type and number. Will happen eventually if all references go away, but sometimes you want it to happen now.
 - (void)destroy;
 
-@property (readonly) WKWebView *webView;
+@property (readonly) GhosttyTerminalDisplay *displayView;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
 // Use KVO on this
 @property (readonly) BOOL loaded;
