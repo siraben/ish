@@ -91,6 +91,7 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_READV 65
 #define SYS_WRITEV 66
 #define SYS_CLOSE 57
+#define SYS_FSTATAT 79
 #define SYS_FSTAT 80
 #define SYS_GETPID 172
 #define SYS_GETPPID 173
@@ -118,6 +119,7 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_OPENAT 56
 #define SYS_PIPE2 59
 #define SYS_LSEEK 62
+#define SYS_PPOLL 73
 #define SYS_CLOCK_GETTIME 113
 #define AT_FDCWD (-100)
 #elif defined(__i386__)
@@ -168,6 +170,7 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_READV 145
 #define SYS_WRITEV 146
 #define SYS_CLOSE 6
+#define SYS_FSTATAT 300
 #define SYS_FSTAT 197
 #define SYS_GETPID 20
 #define SYS_GETPPID 64
@@ -194,11 +197,17 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_OPEN 5
 #define SYS_PIPE 42
 #define SYS_LSEEK 19
+#define SYS_POLL 168
 #define SYS_CLOCK_GETTIME 265
 #endif
 
 #define CLOCK_MONOTONIC 1
 #define CLOCK_REALTIME 0
+
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+#define AT_SYMLINK_NOFOLLOW 0x100
 
 #define O_RDONLY 0
 #define O_RDWR 2
@@ -214,6 +223,8 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define EPOLL_CTL_ADD 1
 #define EPOLLIN 0x001
 #define EPOLLOUT 0x004
+#define POLLIN 0x001
+#define POLLOUT 0x004
 
 #define F_GETFD 1
 #define F_SETFD 2
@@ -250,6 +261,10 @@ static long sys_close(int fd) {
 
 static long sys_fstat(int fd, void *statbuf) {
     return syscall2(SYS_FSTAT, fd, (long) statbuf);
+}
+
+static long sys_fstatat(int fd, const char *path, void *statbuf, int flags) {
+    return syscall4(SYS_FSTATAT, fd, (long) path, (long) statbuf, flags);
 }
 
 static long sys_getpid(void) {
@@ -377,6 +392,21 @@ struct bench_epoll_event {
     unsigned events;
     unsigned long long data;
 } __attribute__((packed));
+
+struct bench_pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+static long sys_poll0(struct bench_pollfd *fds, unsigned long nfds) {
+#if defined(__riscv)
+    struct bench_timespec timeout = {0, 0};
+    return syscall5(SYS_PPOLL, (long) fds, nfds, (long) &timeout, 0, 0);
+#else
+    return syscall3(SYS_POLL, (long) fds, nfds, 0);
+#endif
+}
 
 static long sys_eventfd2(unsigned initval, int flags) {
     return syscall2(SYS_EVENTFD2, initval, flags);
