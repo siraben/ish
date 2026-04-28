@@ -147,7 +147,7 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     if (stat_cache_lookup(fs, path, stat, inode))
         return true;
 
-    // select inode, stat from stats natural join paths where path = ?
+    // select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?
     bind_path(fs->stmt.path_read_stat, 1, path);
     bool exists = db_exec(fs, fs->stmt.path_read_stat);
     inode_t found_inode = 0;
@@ -354,7 +354,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     fs->stmt.commit = db_prepare(fs, "commit");
     fs->stmt.rollback = db_prepare(fs, "rollback");
     fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
-    fs->stmt.path_read_stat = db_prepare(fs, "select inode, stat from stats natural join paths where path = ?");
+    fs->stmt.path_read_stat = db_prepare(fs, "select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?");
     fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (stat) values (?)");
     fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, last_insert_rowid())");
     fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");

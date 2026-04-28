@@ -14,7 +14,9 @@ struct ish_stat {
 
 typedef uint64_t inode_t;
 
-#define FAKEFS_STAT_CACHE_SIZE 512
+#ifndef FAKEFS_STAT_CACHE_SIZE
+#define FAKEFS_STAT_CACHE_SIZE 2048
+#endif
 
 struct fakefs_stat_cache_entry {
     char *path;

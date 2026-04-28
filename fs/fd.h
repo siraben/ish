@@ -7,6 +7,7 @@
 #include "util/sync.h"
 #include "util/bits.h"
 #include "fs/stat.h"
+#include "fs/fake-db.h"
 #include "fs/proc.h"
 #include "fs/sockrestart.h"
 
@@ -101,6 +102,10 @@ struct fd {
     DIR *dir;
     struct inode_data *inode;
     ino_t fake_inode;
+    struct ish_stat fake_ishstat;
+    uint64_t fake_ishstat_generation;
+    bool fake_ishstat_valid;
+    char *fake_dir_path;
     struct statbuf stat; // for adhoc fs
     struct fd_sockrestart sockrestart; // argh
 

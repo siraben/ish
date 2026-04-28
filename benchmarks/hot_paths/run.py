@@ -18,16 +18,25 @@ class Benchmark:
     command: str
 
 
+class BenchmarkSkipped(Exception):
+    pass
+
+
 BENCHMARKS = [
     Benchmark("shell_startup", None, None, "time", '/bin/sh -lc "true"'),
     Benchmark("shell_control", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/shell_control.sh"),
     Benchmark("shell_pipeline", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/shell_pipeline.sh"),
     Benchmark("fs_metadata", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/fs_metadata.sh"),
     Benchmark("recursive_ls_deep", "/bin/ls", None, "time", "/bin/sh /tmp/bench-hot-paths/guest/recursive_ls_deep.sh"),
+    Benchmark("find_stat_deep", "/usr/bin/find", None, "time", "/bin/sh /tmp/bench-hot-paths/guest/find_stat_deep.sh"),
+    Benchmark("apk_list", "/sbin/apk", None, "time", "/bin/sh /tmp/bench-hot-paths/guest/apk_list.sh"),
     Benchmark("prime_sieve", None, None, "self", "/tmp/bench-hot-paths/bin/prime_sieve"),
     Benchmark("mandelbrot", None, None, "self", "/tmp/bench-hot-paths/bin/mandelbrot"),
     Benchmark("file_io", None, 16 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_io"),
     Benchmark("file_io_small", None, 8 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_io_small"),
+    Benchmark("file_iov", None, 256 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_iov"),
+    Benchmark("fstat_loop", None, None, "self", "/tmp/bench-hot-paths/bin/fstat_loop"),
+    Benchmark("socket_msg_iov", None, 128 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/socket_msg_iov"),
     Benchmark("file_copy", None, 48 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_copy"),
     Benchmark("file_copy_64k", None, 48 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_copy_64k"),
     Benchmark("file_random_write", None, 24 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_random_write"),
@@ -97,9 +106,23 @@ def parse_self_elapsed(output: str) -> float:
 
 def run_benchmark(ish: str, bench: Benchmark) -> float:
     if bench.timer == "self":
-        output = guest_run(ish, bench.command)
+        result = subprocess.run(guest_cmd(ish, bench.command), shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if result.returncode == 77:
+            raise BenchmarkSkipped()
+        result.check_returncode()
+        output = result.stdout
         return parse_self_elapsed(output)
-    output = run_text(f"{ish} /usr/bin/time -f '%e' /bin/sh -lc {shlex.quote(bench.command)}")
+    result = subprocess.run(
+        f"{ish} /usr/bin/time -f '%e' /bin/sh -lc {shlex.quote(bench.command)}",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.returncode == 77:
+        raise BenchmarkSkipped()
+    result.check_returncode()
+    output = result.stdout
     for line in reversed(output.splitlines()):
         try:
             return float(line.strip())
@@ -174,11 +197,16 @@ def main() -> int:
                 subprocess.run(guest_cmd(ish, bench.command), shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             times: list[float] = []
-            for i in range(1, runs + 1):
-                print(f"### {bench.name} run {i}/{runs}", file=sys.stderr)
-                elapsed = run_benchmark(ish, bench)
-                times.append(elapsed)
-                print(f"{bench.name}\t{i}\t{elapsed:.9f}", file=raw)
+            try:
+                for i in range(1, runs + 1):
+                    print(f"### {bench.name} run {i}/{runs}", file=sys.stderr)
+                    elapsed = run_benchmark(ish, bench)
+                    times.append(elapsed)
+                    print(f"{bench.name}\t{i}\t{elapsed:.9f}", file=raw)
+            except BenchmarkSkipped:
+                print(f"### {bench.name} skipped: benchmark precondition not met", file=sys.stderr)
+                print(f"### {bench.name} skipped: benchmark precondition not met", file=raw)
+                continue
 
             best, avg, stdev, rsd, best_mib, avg_mib = summarize(times, bench.bytes)
             print(

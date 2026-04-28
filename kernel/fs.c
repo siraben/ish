@@ -271,6 +271,28 @@ static int build_user_iov(addr_t addr, size_t size, int prot, struct iovec *iov,
     return 0;
 }
 
+static int append_user_iov(addr_t addr, size_t size, int prot, struct iovec *iov, int *iovcnt, int max_iovcnt) {
+    addr_t p = addr;
+    size_t remaining = size;
+    while (remaining != 0) {
+        if (*iovcnt >= max_iovcnt)
+            return _ENOSYS;
+        addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
+        size_t chunk = chunk_end - p;
+        if (chunk > remaining)
+            chunk = remaining;
+        void *ptr = mem_ptr(current->mem, p, prot);
+        if (ptr == NULL)
+            return _EFAULT;
+        iov[*iovcnt].iov_base = ptr;
+        iov[*iovcnt].iov_len = chunk;
+        (*iovcnt)++;
+        p += chunk;
+        remaining -= chunk;
+    }
+    return 0;
+}
+
 static ssize_t sys_read_direct(struct fd *fd, addr_t buf_addr, size_t size) {
     if (!S_ISREG(fd->type) || fd->ops->readv == NULL || size < DIRECT_IO_MIN_SIZE)
         return _ENOSYS;
@@ -321,6 +343,44 @@ static ssize_t sys_write_direct(struct fd *fd, addr_t buf_addr, size_t size) {
     return total;
 }
 
+static ssize_t sys_readv_direct(struct fd *fd, struct iovec_ *guest_iov, unsigned guest_iovcnt, size_t size) {
+    if (!S_ISREG(fd->type) || fd->ops->readv == NULL || size < DIRECT_IO_MIN_SIZE)
+        return _ENOSYS;
+
+    struct iovec iov[DIRECT_IOV_MAX];
+    int iovcnt = 0;
+    read_wrlock(&current->mem->lock);
+    for (unsigned i = 0; i < guest_iovcnt; i++) {
+        int err = append_user_iov(guest_iov[i].base, guest_iov[i].len, MEM_WRITE, iov, &iovcnt, DIRECT_IOV_MAX);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return err;
+        }
+    }
+    ssize_t res = fd->ops->readv(fd, iov, iovcnt);
+    read_wrunlock(&current->mem->lock);
+    return res;
+}
+
+static ssize_t sys_writev_direct(struct fd *fd, struct iovec_ *guest_iov, unsigned guest_iovcnt, size_t size) {
+    if (!S_ISREG(fd->type) || fd->ops->writev == NULL || size < DIRECT_IO_MIN_SIZE)
+        return _ENOSYS;
+
+    struct iovec iov[DIRECT_IOV_MAX];
+    int iovcnt = 0;
+    read_wrlock(&current->mem->lock);
+    for (unsigned i = 0; i < guest_iovcnt; i++) {
+        int err = append_user_iov(guest_iov[i].base, guest_iov[i].len, MEM_READ, iov, &iovcnt, DIRECT_IOV_MAX);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return err;
+        }
+    }
+    ssize_t res = fd->ops->writev(fd, iov, iovcnt);
+    read_wrunlock(&current->mem->lock);
+    return res;
+}
+
 static ssize_t sys_read_fd(struct fd *fd, void *buf, size_t size) {
     if (S_ISDIR(fd->type))
         return _EISDIR;
@@ -343,13 +403,6 @@ static ssize_t sys_read_fd(struct fd *fd, void *buf, size_t size) {
         STRACE(" \"%.*s\"", print_size, buf);
     }
     return res;
-}
-
-static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
-    if (fd == NULL)
-        return _EBADF;
-    return sys_read_fd(fd, buf, size);
 }
 
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
@@ -393,13 +446,6 @@ static ssize_t sys_write_fd(struct fd *fd, void *buf, size_t size) {
         return _EBADF;
     }
     return res;
-}
-
-static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
-    if (fd == NULL)
-        return _EBADF;
-    return sys_write_fd(fd, buf, size);
 }
 
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
@@ -476,12 +522,22 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
         return io_size_res;
     }
     size_t io_size = io_size_res;
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL) {
+        free(iovec);
+        return _EBADF;
+    }
+    ssize_t direct_res = sys_readv_direct(fd, iovec, iovec_count, io_size);
+    if (direct_res != _ENOSYS) {
+        free(iovec);
+        return direct_res;
+    }
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
         return _ENOMEM;
     }
-    ssize_t res = sys_read_buf(fd_no, buf, io_size);
+    ssize_t res = sys_read_fd(fd, buf, io_size);
     if (res < 0)
         goto error;
 
@@ -491,11 +547,16 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
         if (print_size > 100) print_size = 100;
         STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
 
-        if (user_write(iovec[i].base, buf + offset, iovec[i].len)) {
+        size_t chunk = iovec[i].len;
+        if (chunk > (size_t) res - offset)
+            chunk = (size_t) res - offset;
+        if (chunk != 0 && user_write(iovec[i].base, buf + offset, chunk)) {
             res = _EFAULT;
             goto error;
         }
-        offset += iovec[i].len;
+        offset += chunk;
+        if (offset >= (size_t) res)
+            break;
     }
 
 error:
@@ -515,6 +576,16 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
         return io_size_res;
     }
     size_t io_size = io_size_res;
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL) {
+        free(iovec);
+        return _EBADF;
+    }
+    ssize_t direct_res = sys_writev_direct(fd, iovec, iovec_count, io_size);
+    if (direct_res != _ENOSYS) {
+        free(iovec);
+        return direct_res;
+    }
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -534,7 +605,7 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
         STRACE(" {\"%.*s\", %zu}", print_size, buf + offset, (size_t) iovec[i].len);
         offset += iovec[i].len;
     }
-    res = sys_write_buf(fd_no, buf, io_size);
+    res = sys_write_fd(fd, buf, io_size);
 
 error:
     free(buf);

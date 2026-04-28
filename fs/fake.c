@@ -1,5 +1,6 @@
 #include <stdarg.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -20,6 +21,12 @@
 
 // this exists only to override readdir to fix the returned inode numbers
 static struct fd_ops fakefs_fdops;
+
+static void fakefs_fd_cache_stat(struct fd *fd, struct fakefs_db *fs, const struct ish_stat *stat) {
+    fd->fake_ishstat = *stat;
+    fd->fake_ishstat_generation = fs->cache_generation;
+    fd->fake_ishstat_valid = true;
+}
 
 static const char *fakefs_builtin_symlink(const char *path) {
     if (strcmp(path, "/dev/fd") == 0)
@@ -58,19 +65,25 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
     struct fd *fd = realfs.open(mount, path, flags, 0666);
     if (IS_ERR(fd))
         return fd;
-    db_begin_write(fs);
+    bool may_create = flags & O_CREAT_;
+    if (may_create)
+        db_begin_write(fs);
+    else
+        db_begin_read(fs);
+    struct ish_stat ishstat;
     fd->fake_inode = path_get_inode(fs, path);
-    if (flags & O_CREAT_) {
-        struct ish_stat ishstat;
+    if (may_create) {
         ishstat.mode = mode | S_IFREG;
         ishstat.uid = current->fsuid;
         ishstat.gid = current->fsgid;
         ishstat.rdev = 0;
         if (fd->fake_inode == 0) {
-            path_create(fs, path, &ishstat);
-            fd->fake_inode = path_get_inode(fs, path);
+            fd->fake_inode = path_create(fs, path, &ishstat);
         }
     }
+    if (fd->fake_inode != 0)
+        if (!path_read_stat(fs, path, &ishstat, NULL))
+            fd->fake_inode = 0;
     db_commit(fs);
     if (fd->fake_inode == 0) {
         // metadata for this file is missing
@@ -78,6 +91,7 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
         fd_close(fd);
         return ERR_PTR(_ENOENT);
     }
+    fakefs_fd_cache_stat(fd, fs, &ishstat);
     fd->ops = &fakefs_fdops;
     return fd;
 }
@@ -104,6 +118,11 @@ step:
     db_commit(fs);
     fd->fake_inode = inode;
     fd->ops = &fakefs_fdops;
+    db_begin_read(fs);
+    struct ish_stat ishstat;
+    if (inode_read_stat_if_exist(fs, inode, &ishstat))
+        fakefs_fd_cache_stat(fd, fs, &ishstat);
+    db_commit(fs);
     return fd;
 }
 
@@ -246,13 +265,18 @@ static int fakefs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     int err = realfs.fstat(fd, fake_stat);
     if (err < 0)
         return err;
-    db_begin_read(fs);
     struct ish_stat ishstat;
-    if (!inode_read_stat_if_exist(fs, fd->fake_inode, &ishstat)) {
-        db_rollback(fs);
-        return _ENOENT;
+    if (fd->fake_ishstat_valid && fd->fake_ishstat_generation == fs->cache_generation) {
+        ishstat = fd->fake_ishstat;
+    } else {
+        db_begin_read(fs);
+        if (!inode_read_stat_if_exist(fs, fd->fake_inode, &ishstat)) {
+            db_rollback(fs);
+            return _ENOENT;
+        }
+        db_commit(fs);
+        fakefs_fd_cache_stat(fd, fs, &ishstat);
     }
-    db_commit(fs);
     fake_stat->inode = fd->fake_inode;
     fake_stat->mode = ishstat.mode;
     fake_stat->uid = ishstat.uid;
@@ -304,6 +328,7 @@ static int fakefs_fsetattr(struct fd *fd, struct attr attr) {
     fake_stat_setattr(&ishstat, attr);
     inode_write_stat(fs, fd->fake_inode, &ishstat);
     db_commit(fs);
+    fakefs_fd_cache_stat(fd, fs, &ishstat);
     return 0;
 }
 
@@ -371,7 +396,12 @@ retry:
 
     // this is annoying
     char entry_path[MAX_PATH + 1];
-    realfs_getpath(fd, entry_path);
+    if (fd->fake_dir_path == NULL) {
+        realfs_getpath(fd, entry_path);
+        fd->fake_dir_path = strdup(entry_path);
+    } else {
+        strcpy(entry_path, fd->fake_dir_path);
+    }
     if (strcmp(entry->name, "..") == 0) {
         if (strcmp(entry_path, "") != 0) {
             *strrchr(entry_path, '/') = '\0';
@@ -391,10 +421,17 @@ retry:
     return res;
 }
 
+static int fakefs_close_fd(struct fd *fd) {
+    free(fd->fake_dir_path);
+    fd->fake_dir_path = NULL;
+    return 0;
+}
+
 static struct fd_ops fakefs_fdops;
 static void __attribute__((constructor)) init_fake_fdops() {
     fakefs_fdops = realfs_fdops;
     fakefs_fdops.readdir = fakefs_readdir;
+    fakefs_fdops.close = fakefs_close_fd;
 }
 
 static int fakefs_mount(struct mount *mount) {

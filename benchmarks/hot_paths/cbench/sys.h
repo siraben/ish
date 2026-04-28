@@ -3,10 +3,29 @@
 
 typedef unsigned long usize;
 typedef long isize;
+typedef unsigned long bench_addr_t;
 
 struct bench_timespec {
     isize sec;
     isize nsec;
+};
+
+struct bench_iovec {
+    bench_addr_t base;
+    usize len;
+};
+
+struct bench_msghdr {
+    bench_addr_t msg_name;
+    unsigned msg_namelen;
+#if defined(__riscv)
+    unsigned __pad_msg_namelen;
+#endif
+    bench_addr_t msg_iov;
+    usize msg_iovlen;
+    bench_addr_t msg_control;
+    usize msg_controllen;
+    int msg_flags;
 };
 
 #if defined(__riscv)
@@ -48,7 +67,13 @@ static long syscall4(long n, long x0, long x1, long x2, long x3) {
 }
 #define SYS_READ 63
 #define SYS_WRITE 64
+#define SYS_READV 65
+#define SYS_WRITEV 66
 #define SYS_CLOSE 57
+#define SYS_FSTAT 80
+#define SYS_SOCKETPAIR 199
+#define SYS_SENDMSG 211
+#define SYS_RECVMSG 212
 #define SYS_EXIT 93
 #define SYS_OPENAT 56
 #define SYS_PIPE2 59
@@ -83,8 +108,12 @@ static long syscall4(long n, long x0, long x1, long x2, long x3) {
 }
 #define SYS_READ 3
 #define SYS_WRITE 4
+#define SYS_READV 145
+#define SYS_WRITEV 146
 #define SYS_CLOSE 6
+#define SYS_FSTAT 197
 #define SYS_EXIT 1
+#define SYS_SOCKETCALL 102
 #define SYS_OPEN 5
 #define SYS_PIPE 42
 #define SYS_LSEEK 19
@@ -106,9 +135,49 @@ static long sys_write(int fd, const void *buf, usize n) {
     return syscall3(SYS_WRITE, fd, (long) buf, n);
 }
 
+static long sys_readv(int fd, const struct bench_iovec *iov, usize iovcnt) {
+    return syscall3(SYS_READV, fd, (long) iov, iovcnt);
+}
+
+static long sys_writev(int fd, const struct bench_iovec *iov, usize iovcnt) {
+    return syscall3(SYS_WRITEV, fd, (long) iov, iovcnt);
+}
+
 static long sys_close(int fd) {
     return syscall1(SYS_CLOSE, fd);
 }
+
+static long sys_fstat(int fd, void *statbuf) {
+    return syscall2(SYS_FSTAT, fd, (long) statbuf);
+}
+
+static long sys_socketpair(int domain, int type, int protocol, int fds[2]) {
+#if defined(__riscv)
+    return syscall4(SYS_SOCKETPAIR, domain, type, protocol, (long) fds);
+#else
+    long args[4] = {domain, type, protocol, (long) fds};
+    return syscall2(SYS_SOCKETCALL, 8, (long) args);
+#endif
+}
+
+static long sys_sendmsg(int fd, struct bench_msghdr *msg, int flags) {
+#if defined(__riscv)
+    return syscall3(SYS_SENDMSG, fd, (long) msg, flags);
+#else
+    long args[3] = {fd, (long) msg, flags};
+    return syscall2(SYS_SOCKETCALL, 16, (long) args);
+#endif
+}
+
+static long sys_recvmsg(int fd, struct bench_msghdr *msg, int flags) {
+#if defined(__riscv)
+    return syscall3(SYS_RECVMSG, fd, (long) msg, flags);
+#else
+    long args[3] = {fd, (long) msg, flags};
+    return syscall2(SYS_SOCKETCALL, 17, (long) args);
+#endif
+}
+
 
 static long sys_lseek(int fd, long offset, int whence) {
     return syscall3(SYS_LSEEK, fd, offset, whence);
