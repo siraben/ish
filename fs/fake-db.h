@@ -106,7 +106,7 @@ void db_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_flush_deferred(struct fakefs_db *fs);
 void stat_cache_clear(struct fakefs_db *fs);
-bool fakefs_record_deferred_create(int root_fd, int fd, const struct ish_stat *stat);
+bool fakefs_record_deferred_create(int root_fd, int fd, const char *path, const struct ish_stat *stat);
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);

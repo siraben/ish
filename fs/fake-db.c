@@ -1,7 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -113,11 +112,17 @@ static int fakefs_fremovexattr(int fd, const char *name) {
 #endif
 }
 
-bool fakefs_record_deferred_create(int root_fd, int fd, const struct ish_stat *stat) {
-    int marker = openat(root_fd, FAKEFS_PENDING_CREATE_MARKER, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+bool fakefs_record_deferred_create(int root_fd, int fd, const char *path, const struct ish_stat *stat) {
+    int marker = openat(root_fd, FAKEFS_PENDING_CREATE_MARKER, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     if (marker < 0)
         return false;
+    size_t path_len = strlen(path);
+    bool recorded_path = path_len <= MAX_PATH &&
+        write(marker, path, path_len) == (ssize_t) path_len &&
+        write(marker, "\n", 1) == 1;
     close(marker);
+    if (!recorded_path)
+        return false;
 
     struct fakefs_pending_create pending = {
         .magic = FAKEFS_PENDING_CREATE_MAGIC,
@@ -631,53 +636,33 @@ static void fakefs_recover_pending_path(struct fakefs_db *fs, int fd, const char
     fakefs_clear_deferred_create_fd(fd);
 }
 
-static void fakefs_recover_pending_dir(struct fakefs_db *fs, int dir_fd, const char *dir_path) {
-    int dup_fd = dup(dir_fd);
-    if (dup_fd < 0)
-        return;
-    DIR *dir = fdopendir(dup_fd);
-    if (dir == NULL) {
-        close(dup_fd);
-        return;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
-                strcmp(entry->d_name, FAKEFS_PENDING_CREATE_MARKER) == 0)
-            continue;
-
-        char path[MAX_PATH + 1];
-        if (strcmp(dir_path, "/") == 0) {
-            if (snprintf(path, sizeof(path), "/%s", entry->d_name) >= (int) sizeof(path))
-                continue;
-        } else {
-            if (snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name) >= (int) sizeof(path))
-                continue;
-        }
-
-        int fd = openat(dir_fd, entry->d_name, O_RDONLY | O_CLOEXEC);
-        if (fd < 0)
-            continue;
-        fakefs_recover_pending_path(fs, fd, path);
-
-        struct stat stat;
-        if (fstat(fd, &stat) == 0 && S_ISDIR(stat.st_mode))
-            fakefs_recover_pending_dir(fs, fd, path);
-        close(fd);
-    }
-    closedir(dir);
-}
-
 static void fakefs_recover_pending_creates(struct fakefs_db *fs) {
     int marker = openat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, O_RDONLY | O_CLOEXEC);
     if (marker < 0)
         return;
-    close(marker);
+    FILE *marker_file = fdopen(marker, "r");
+    if (marker_file == NULL) {
+        close(marker);
+        return;
+    }
 
     db_exec_reset(fs, fs->stmt.begin_immediate);
-    fakefs_recover_pending_dir(fs, fs->root_fd, "/");
+    char path[MAX_PATH + 2];
+    while (fgets(path, sizeof(path), marker_file) != NULL) {
+        size_t len = strlen(path);
+        if (len == 0 || path[len - 1] != '\n')
+            continue;
+        path[len - 1] = '\0';
+        if (path[0] != '/' || path[1] == '\0')
+            continue;
+        int fd = openat(fs->root_fd, fix_path(path), O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+            continue;
+        fakefs_recover_pending_path(fs, fd, path);
+        close(fd);
+    }
     db_exec_reset(fs, fs->stmt.commit);
+    fclose(marker_file);
     unlinkat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, 0);
 }
 

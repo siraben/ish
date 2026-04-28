@@ -28,9 +28,9 @@ static void fakefs_fd_cache_stat(struct fd *fd, struct fakefs_db *fs, const stru
     fd->fake_ishstat_valid = true;
 }
 
-static void fakefs_record_or_flush_deferred_create(struct mount *mount, int fd, const struct ish_stat *stat) {
+static void fakefs_record_or_flush_deferred_create(struct mount *mount, int fd, const char *path, const struct ish_stat *stat) {
     struct fakefs_db *fs = &mount->fakefs;
-    if (fakefs_record_deferred_create(mount->root_fd, fd, stat))
+    if (fakefs_record_deferred_create(mount->root_fd, fd, path, stat))
         return;
     sqlite3_mutex_enter(fs->lock);
     db_flush_deferred(fs);
@@ -90,7 +90,7 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
             realfs.unlink(mount, path);
             return ERR_PTR(_ENOMEM);
         }
-        fakefs_record_or_flush_deferred_create(mount, fd->real_fd, &ishstat);
+        fakefs_record_or_flush_deferred_create(mount, fd->real_fd, path, &ishstat);
         fakefs_fd_cache_stat(fd, fs, &ishstat);
         fd->ops = &fakefs_fdops;
         return fd;
@@ -255,7 +255,7 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
         unlinkat(mount->root_fd, fix_path(link), 0);
         return _ENOMEM;
     }
-    fakefs_record_or_flush_deferred_create(mount, fd, &ishstat);
+    fakefs_record_or_flush_deferred_create(mount, fd, link, &ishstat);
     close(fd);
     return 0;
 }
@@ -404,7 +404,7 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     }
     int fd = openat(mount->root_fd, fix_path(path), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd >= 0) {
-        fakefs_record_or_flush_deferred_create(mount, fd, &ishstat);
+        fakefs_record_or_flush_deferred_create(mount, fd, path, &ishstat);
         close(fd);
     } else {
         sqlite3_mutex_enter(fs->lock);
