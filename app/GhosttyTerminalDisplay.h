@@ -26,6 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL terminalFocused;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
 @property (nonatomic, readonly) BOOL hasSelection;
+@property (nonatomic, readonly) NSInteger cellCount;
 
 - (void)writeBytes:(const void *)bytes length:(size_t)length completion:(void (^)(void))completion;
 - (void)updateFontFamily:(NSString *)fontFamily
@@ -46,6 +47,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateSelectionAtPoint:(CGPoint)point;
 - (void)clearSelection;
 - (CGRect)selectionBoundingRect;
+- (NSInteger)cellOffsetAtPoint:(CGPoint)point;
+- (void)setSelectionFromCellOffset:(NSInteger)startOffset toCellOffset:(NSInteger)endOffset;
+- (NSString *)textInCellRange:(NSRange)range;
+- (CGRect)firstRectForCellRange:(NSRange)range;
+- (NSArray<NSValue *> *)rectsForCellRange:(NSRange)range;
 
 @end
 

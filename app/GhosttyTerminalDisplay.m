@@ -125,10 +125,8 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     CFTimeInterval _benchmarkDrawTime;
     NSMutableArray<NSMutableArray<NSString *> *> *_visibleCells;
     BOOL _hasSelection;
-    NSInteger _selectionAnchorRow;
-    NSInteger _selectionAnchorColumn;
-    NSInteger _selectionFocusRow;
-    NSInteger _selectionFocusColumn;
+    NSInteger _selectionStartOffset;
+    NSInteger _selectionEndOffset;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -414,30 +412,36 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     return _hasSelection;
 }
 
+- (NSInteger)cellCount {
+    return MAX(0, self.rows) * MAX(0, self.columns);
+}
+
 - (void)beginSelectionAtPoint:(CGPoint)point {
-    [self updateSelectionEndpointAtPoint:point anchor:YES];
+    NSInteger offset = [self cellOffsetAtPoint:point];
+    [self setSelectionFromCellOffset:offset toCellOffset:MIN(offset + 1, self.cellCount)];
 }
 
 - (void)updateSelectionAtPoint:(CGPoint)point {
-    [self updateSelectionEndpointAtPoint:point anchor:NO];
+    NSInteger offset = [self cellOffsetAtPoint:point];
+    [self setSelectionFromCellOffset:_selectionStartOffset toCellOffset:MIN(offset + 1, self.cellCount)];
 }
 
-- (void)updateSelectionEndpointAtPoint:(CGPoint)point anchor:(BOOL)anchor {
+- (NSInteger)cellOffsetAtPoint:(CGPoint)point {
     if (self.columns <= 0 || self.rows <= 0)
-        return;
+        return 0;
 
     NSInteger column = (NSInteger) floor(point.x / MAX(1, self.characterSize.width));
     NSInteger row = (NSInteger) floor(point.y / MAX(1, self.characterSize.height));
-    column = MAX(0, MIN((NSInteger) self.columns - 1, column));
+    column = MAX(0, MIN((NSInteger) self.columns, column));
     row = MAX(0, MIN((NSInteger) self.rows - 1, row));
+    return MAX(0, MIN(self.cellCount, row * self.columns + column));
+}
 
-    if (anchor) {
-        _selectionAnchorRow = row;
-        _selectionAnchorColumn = column;
-        _hasSelection = YES;
-    }
-    _selectionFocusRow = row;
-    _selectionFocusColumn = column;
+- (void)setSelectionFromCellOffset:(NSInteger)startOffset toCellOffset:(NSInteger)endOffset {
+    NSInteger cellCount = self.cellCount;
+    _selectionStartOffset = MAX(0, MIN(cellCount, startOffset));
+    _selectionEndOffset = MAX(0, MIN(cellCount, endOffset));
+    _hasSelection = _selectionStartOffset != _selectionEndOffset;
     [self setNeedsDisplay];
 }
 
@@ -445,39 +449,31 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     if (!_hasSelection)
         return;
     _hasSelection = NO;
+    _selectionStartOffset = 0;
+    _selectionEndOffset = 0;
     [self setNeedsDisplay];
 }
 
 - (void)copySelectionToPasteboard {
-    NSString *selection = [self selectedText];
+    NSString *selection = [self textInCellRange:NSMakeRange(MIN(_selectionStartOffset, _selectionEndOffset),
+                                                            labs(_selectionEndOffset - _selectionStartOffset))];
     if (selection.length > 0)
         UIPasteboard.generalPasteboard.string = selection;
 }
 
-- (NSString *)selectedText {
-    if (!_hasSelection || _visibleCells.count == 0)
-        return nil;
+- (NSString *)textInCellRange:(NSRange)range {
+    if (_visibleCells.count == 0 || range.length == 0 || self.columns <= 0)
+        return @"";
 
-    NSInteger startRow = _selectionAnchorRow;
-    NSInteger startColumn = _selectionAnchorColumn;
-    NSInteger endRow = _selectionFocusRow;
-    NSInteger endColumn = _selectionFocusColumn;
-    if (startRow > endRow || (startRow == endRow && startColumn > endColumn)) {
-        NSInteger tmp = startRow;
-        startRow = endRow;
-        endRow = tmp;
-        tmp = startColumn;
-        startColumn = endColumn;
-        endColumn = tmp;
-    }
-
+    NSInteger startOffset = MAX(0, MIN(self.cellCount, (NSInteger) range.location));
+    NSInteger endOffset = MAX(startOffset, MIN(self.cellCount, (NSInteger) NSMaxRange(range)));
     NSMutableArray<NSString *> *lines = [NSMutableArray new];
-    for (NSInteger row = startRow; row <= endRow && row < (NSInteger) _visibleCells.count; row++) {
+    for (NSInteger row = startOffset / self.columns; row <= (endOffset - 1) / self.columns && row < (NSInteger) _visibleCells.count; row++) {
         NSArray<NSString *> *cells = _visibleCells[row];
-        NSInteger firstColumn = row == startRow ? startColumn : 0;
-        NSInteger lastColumn = row == endRow ? endColumn : (NSInteger) cells.count - 1;
+        NSInteger firstColumn = row == startOffset / self.columns ? startOffset % self.columns : 0;
+        NSInteger lastColumnExclusive = row == (endOffset - 1) / self.columns ? ((endOffset - 1) % self.columns) + 1 : (NSInteger) cells.count;
         NSMutableString *line = [NSMutableString new];
-        for (NSInteger column = firstColumn; column <= lastColumn && column < (NSInteger) cells.count; column++)
+        for (NSInteger column = firstColumn; column < lastColumnExclusive && column < (NSInteger) cells.count; column++)
             [line appendString:cells[column]];
         while ([line hasSuffix:@" "])
             [line deleteCharactersInRange:NSMakeRange(line.length - 1, 1)];
@@ -489,39 +485,46 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 - (CGRect)selectionBoundingRect {
     if (!_hasSelection)
         return CGRectZero;
-    NSInteger startRow = MIN(_selectionAnchorRow, _selectionFocusRow);
-    NSInteger endRow = MAX(_selectionAnchorRow, _selectionFocusRow);
-    NSInteger startColumn = MIN(_selectionAnchorColumn, _selectionFocusColumn);
-    NSInteger endColumn = MAX(_selectionAnchorColumn, _selectionFocusColumn);
-    return CGRectMake(startColumn * self.characterSize.width,
-                      startRow * self.characterSize.height,
-                      MAX(1, endColumn - startColumn + 1) * self.characterSize.width,
-                      MAX(1, endRow - startRow + 1) * self.characterSize.height);
+    return [self firstRectForCellRange:NSMakeRange(MIN(_selectionStartOffset, _selectionEndOffset),
+                                                   labs(_selectionEndOffset - _selectionStartOffset))];
+}
+
+- (CGRect)firstRectForCellRange:(NSRange)range {
+    return [self rectsForCellRange:range].firstObject.CGRectValue;
+}
+
+- (NSArray<NSValue *> *)rectsForCellRange:(NSRange)range {
+    if (range.length == 0 || self.columns <= 0 || self.rows <= 0)
+        return @[];
+
+    NSInteger startOffset = MAX(0, MIN(self.cellCount, (NSInteger) range.location));
+    NSInteger endOffset = MAX(startOffset, MIN(self.cellCount, (NSInteger) NSMaxRange(range)));
+    if (startOffset == endOffset)
+        return @[];
+
+    NSMutableArray<NSValue *> *rects = [NSMutableArray new];
+    NSInteger firstRow = startOffset / self.columns;
+    NSInteger lastRow = (endOffset - 1) / self.columns;
+    for (NSInteger row = firstRow; row <= lastRow; row++) {
+        NSInteger firstColumn = row == firstRow ? startOffset % self.columns : 0;
+        NSInteger lastColumnExclusive = row == lastRow ? ((endOffset - 1) % self.columns) + 1 : self.columns;
+        CGRect rect = CGRectMake(firstColumn * self.characterSize.width,
+                                 row * self.characterSize.height,
+                                 MAX(1, lastColumnExclusive - firstColumn) * self.characterSize.width,
+                                 self.characterSize.height);
+        [rects addObject:[NSValue valueWithCGRect:rect]];
+    }
+    return rects;
 }
 
 - (BOOL)isCellSelectedAtRow:(NSInteger)row column:(NSInteger)column {
     if (!_hasSelection)
         return NO;
 
-    NSInteger startRow = _selectionAnchorRow;
-    NSInteger startColumn = _selectionAnchorColumn;
-    NSInteger endRow = _selectionFocusRow;
-    NSInteger endColumn = _selectionFocusColumn;
-    if (startRow > endRow || (startRow == endRow && startColumn > endColumn)) {
-        NSInteger tmp = startRow;
-        startRow = endRow;
-        endRow = tmp;
-        tmp = startColumn;
-        startColumn = endColumn;
-        endColumn = tmp;
-    }
-    if (row < startRow || row > endRow)
-        return NO;
-    if (row == startRow && column < startColumn)
-        return NO;
-    if (row == endRow && column > endColumn)
-        return NO;
-    return YES;
+    NSInteger offset = row * self.columns + column;
+    NSInteger startOffset = MIN(_selectionStartOffset, _selectionEndOffset);
+    NSInteger endOffset = MAX(_selectionStartOffset, _selectionEndOffset);
+    return offset >= startOffset && offset < endOffset;
 }
 
 - (void)updateScrollbar {
