@@ -79,6 +79,7 @@ noreturn void do_exit(int status) {
         if (user_put(clear_tid, zero) == 0)
             futex_wake(clear_tid, 1);
     }
+    futex_exit_robust_list();
 
     // release all our resources
     mm_release(current->mm);

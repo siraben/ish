@@ -182,9 +182,17 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
 
 struct robust_list_head_ {
     addr_t list;
-    dword_t offset;
+    sqword_t offset;
     addr_t list_op_pending;
 };
+
+struct robust_list_ {
+    addr_t next;
+};
+
+#define FUTEX_TID_MASK_ 0x3fffffffu
+#define FUTEX_OWNER_DIED_ 0x40000000u
+#define ROBUST_LIST_LIMIT_ 2048
 
 int_t sys_set_robust_list(addr_t robust_list, dword_t len) {
     STRACE("set_robust_list(%#x, %d)", robust_list, len);
@@ -208,4 +216,44 @@ int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr) {
     if (user_put(len_ptr, (int[]) {sizeof(struct robust_list_head_)}))
         return _EFAULT;
     return 0;
+}
+
+static void futex_exit_robust_entry(addr_t entry, sqword_t offset) {
+    if (entry == 0)
+        return;
+
+    addr_t futex_addr = entry + offset;
+    dword_t value;
+    if (user_get(futex_addr, value))
+        return;
+    if ((value & FUTEX_TID_MASK_) != (dword_t) current->pid)
+        return;
+
+    value = (value & ~FUTEX_TID_MASK_) | FUTEX_OWNER_DIED_;
+    if (user_put(futex_addr, value) == 0)
+        futex_wake(futex_addr, 1);
+}
+
+void futex_exit_robust_list(void) {
+    if (current->robust_list == 0)
+        return;
+
+    struct robust_list_head_ head;
+    if (user_get(current->robust_list, head))
+        return;
+
+    addr_t list_head = current->robust_list;
+    addr_t pending = head.list_op_pending;
+    addr_t entry = head.list;
+
+    for (unsigned i = 0; entry != 0 && entry != list_head && i < ROBUST_LIST_LIMIT_; i++) {
+        struct robust_list_ node;
+        if (user_get(entry, node))
+            break;
+        if (entry != pending)
+            futex_exit_robust_entry(entry, head.offset);
+        entry = node.next;
+    }
+
+    futex_exit_robust_entry(pending, head.offset);
 }
