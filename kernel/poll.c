@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "debug.h"
 #include "kernel/fs.h"
 #include "fs/fd.h"
@@ -126,6 +127,7 @@ struct poll_context {
     int nfds;
 };
 #define POLL_ALWAYS_LISTENING (POLL_ERR|POLL_HUP|POLL_NVAL)
+#define POLL_NFDS_MAX (1024 * 1024)
 static int poll_event_callback(void *context, int types, union poll_fd_info info) {
     struct poll_context *c = context;
     struct pollfd_ *polls = c->polls;
@@ -140,22 +142,34 @@ static int poll_event_callback(void *context, int types, union poll_fd_info info
 }
 dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
     STRACE("poll(0x%x, %d, %d)", fds, nfds, timeout);
-    struct pollfd_ polls[nfds];
+    if (nfds > POLL_NFDS_MAX)
+        return _EINVAL;
+    struct pollfd_ *polls = calloc(nfds, sizeof(*polls));
+    if (polls == NULL && nfds != 0)
+        return _ENOMEM;
     if (fds != 0 || nfds != 0)
-        if (user_read(fds, polls, sizeof(struct pollfd_) * nfds))
+        if (user_read(fds, polls, sizeof(struct pollfd_) * nfds)) {
+            free(polls);
             return _EFAULT;
+        }
     struct poll *poll = poll_create();
-    if (IS_ERR(poll))
+    if (IS_ERR(poll)) {
+        free(polls);
         return PTR_ERR(poll);
+    }
 
     for (unsigned i = 0; i < nfds; i++)
         STRACE(" {%d, %#x}", polls[i].fd, polls[i].events);
     STRACE("...\n");
 
-    struct fd *files[nfds];
-    int group_next[nfds];
-    int group_events[nfds];
-    int group_root[nfds];
+    struct fd **files = calloc(nfds, sizeof(*files));
+    int *group_next = malloc(sizeof(*group_next) * nfds);
+    int *group_events = calloc(nfds, sizeof(*group_events));
+    int *group_root = calloc(nfds, sizeof(*group_root));
+    int *group_table = NULL;
+    int res = _ENOMEM;
+    if ((files == NULL || group_next == NULL || group_events == NULL || group_root == NULL) && nfds != 0)
+        goto out_destroy;
     for (unsigned i = 0; i < nfds; i++) {
         files[i] = polls[i].fd < 0 ? NULL : f_get(polls[i].fd);
         if (files[i] != NULL)
@@ -171,7 +185,9 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
     unsigned group_table_size = 1;
     while (group_table_size < nfds * 2)
         group_table_size <<= 1;
-    int group_table[group_table_size];
+    group_table = malloc(sizeof(*group_table) * group_table_size);
+    if (group_table == NULL)
+        goto out_destroy;
     for (unsigned i = 0; i < group_table_size; i++)
         group_table[i] = -1;
 
@@ -218,21 +234,40 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
         timeout_ts.tv_sec = timeout / 1000;
         timeout_ts.tv_nsec = (timeout % 1000) * 1000000;
     }
-    int res = poll_wait(poll, poll_event_callback, &context, timeout < 0 ? NULL : &timeout_ts);
+    res = poll_wait(poll, poll_event_callback, &context, timeout < 0 ? NULL : &timeout_ts);
+    free(group_table);
+out_destroy:
     poll_destroy(poll);
     for (unsigned i = 0; i < nfds; i++) {
-        if (files[i] != NULL)
+        if (files != NULL && files[i] != NULL)
             fd_close(files[i]);
     }
     STRACE("%d end poll", current->pid);
     for (unsigned i = 0; i < nfds; i++)
         STRACE(" {%d, %#x}", polls[i].fd, polls[i].revents);
 
-    if (res < 0)
+    if (res < 0) {
+        free(group_root);
+        free(group_events);
+        free(group_next);
+        free(files);
+        free(polls);
         return res;
+    }
     if (fds != 0 || nfds != 0)
-        if (user_write(fds, polls, sizeof(struct pollfd_) * nfds))
+        if (user_write(fds, polls, sizeof(struct pollfd_) * nfds)) {
+            free(group_root);
+            free(group_events);
+            free(group_next);
+            free(files);
+            free(polls);
             return _EFAULT;
+        }
+    free(group_root);
+    free(group_events);
+    free(group_next);
+    free(files);
+    free(polls);
     return res;
 }
 

@@ -118,6 +118,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     BOOL _needsRenderStateUpdate;
     BOOL _updatingScrollView;
     BOOL _benchmarkEnabled;
+    BOOL _visibleCellsDirty;
     NSUInteger _benchmarkSamples;
     size_t _benchmarkBytes;
     CFTimeInterval _benchmarkVTTime;
@@ -144,6 +145,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         self.rows = DefaultRows;
         _benchmarkEnabled = [NSProcessInfo.processInfo.environment[@"ISH_BENCH_TERMINAL_DISPLAY"] boolValue];
         _visibleCells = [NSMutableArray new];
+        _visibleCellsDirty = YES;
 
         [self updateCharacterSize];
 
@@ -256,6 +258,14 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         return;
     _needsRenderStateUpdate = NO;
     ghostty_render_state_update(_renderState, _terminal);
+    _visibleCellsDirty = YES;
+}
+
+- (void)ensureVisibleCells {
+    [self updateRenderStateIfNeeded];
+    if (!_visibleCellsDirty)
+        return;
+    _visibleCellsDirty = NO;
     [self updateVisibleCells];
 }
 
@@ -476,6 +486,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 }
 
 - (NSString *)textInCellRange:(NSRange)range {
+    [self ensureVisibleCells];
     if (_visibleCells.count == 0 || range.length == 0 || self.columns <= 0)
         return @"";
 
@@ -532,6 +543,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 }
 
 - (NSString *)visibleText {
+    [self ensureVisibleCells];
     if (_visibleCells.count == 0)
         return @"";
     NSMutableArray<NSString *> *lines = [NSMutableArray arrayWithCapacity:_visibleCells.count];

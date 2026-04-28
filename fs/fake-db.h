@@ -14,6 +14,20 @@ struct ish_stat {
 
 typedef uint64_t inode_t;
 
+#if defined(__APPLE__)
+#define FAKEFS_PENDING_CREATE_XATTR "org.ish.fakefs.pending-create"
+#else
+#define FAKEFS_PENDING_CREATE_XATTR "user.ish.fakefs.pending-create"
+#endif
+#define FAKEFS_PENDING_CREATE_MARKER ".fakefs-pending"
+#define FAKEFS_PENDING_CREATE_MAGIC 0x69736870u
+#define FAKEFS_PENDING_CREATE_VERSION 1u
+struct fakefs_pending_create {
+    uint32_t magic;
+    uint32_t version;
+    struct ish_stat stat;
+};
+
 #ifndef FAKEFS_STAT_CACHE_SIZE
 #define FAKEFS_STAT_CACHE_SIZE 32768
 #endif
@@ -66,6 +80,7 @@ struct fakefs_db {
         sqlite3_stmt *try_cleanup_inode;
     } stmt;
     sqlite3_mutex *lock;
+    int root_fd;
     inode_t next_inode;
     uint64_t cache_generation;
     bool in_write_transaction;
@@ -91,6 +106,7 @@ void db_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_flush_deferred(struct fakefs_db *fs);
 void stat_cache_clear(struct fakefs_db *fs);
+bool fakefs_record_deferred_create(int root_fd, int fd, const struct ish_stat *stat);
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);

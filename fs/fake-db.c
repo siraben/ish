@@ -1,10 +1,24 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
+#include <unistd.h>
 #include "kernel/errno.h"
+#include "kernel/fs.h"
 #include "debug.h"
 #include "misc.h"
 #include "fs/fake-db.h"
+
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+#ifndef ENODATA
+#define ENODATA ENOATTR
+#endif
 
 static void db_check_error(struct fakefs_db *fs) {
     int errcode = sqlite3_errcode(fs->db);
@@ -64,6 +78,69 @@ void db_rollback(struct fakefs_db *fs) {
 
 static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {
     sqlite3_bind_blob(stmt, i, path, strlen(path), SQLITE_TRANSIENT);
+}
+
+static ssize_t fakefs_fgetxattr(int fd, const char *name, void *value, size_t size) {
+#if defined(__APPLE__)
+    return fgetxattr(fd, name, value, size, 0, 0);
+#elif defined(__linux__)
+    return fgetxattr(fd, name, value, size);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+static int fakefs_fsetxattr(int fd, const char *name, const void *value, size_t size) {
+#if defined(__APPLE__)
+    return fsetxattr(fd, name, value, size, 0, 0);
+#elif defined(__linux__)
+    return fsetxattr(fd, name, value, size, 0);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+static int fakefs_fremovexattr(int fd, const char *name) {
+#if defined(__APPLE__)
+    return fremovexattr(fd, name, 0);
+#elif defined(__linux__)
+    return fremovexattr(fd, name);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+bool fakefs_record_deferred_create(int root_fd, int fd, const struct ish_stat *stat) {
+    int marker = openat(root_fd, FAKEFS_PENDING_CREATE_MARKER, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+    if (marker < 0)
+        return false;
+    close(marker);
+
+    struct fakefs_pending_create pending = {
+        .magic = FAKEFS_PENDING_CREATE_MAGIC,
+        .version = FAKEFS_PENDING_CREATE_VERSION,
+        .stat = *stat,
+    };
+    return fakefs_fsetxattr(fd, FAKEFS_PENDING_CREATE_XATTR, &pending, sizeof(pending)) == 0;
+}
+
+static void fakefs_clear_deferred_create_fd(int fd) {
+    if (fakefs_fremovexattr(fd, FAKEFS_PENDING_CREATE_XATTR) < 0 && errno != ENOATTR && errno != ENODATA)
+        return;
+}
+
+static void fakefs_clear_deferred_create_path(int root_fd, const char *path, const struct ish_stat *stat) {
+    int flags = O_RDONLY | O_CLOEXEC;
+    if (S_ISDIR(stat->mode))
+        flags |= O_DIRECTORY;
+    int fd = openat(root_fd, fix_path(path), flags);
+    if (fd < 0)
+        return;
+    fakefs_clear_deferred_create_fd(fd);
+    close(fd);
 }
 
 static uint64_t path_hash(const char *path) {
@@ -198,12 +275,19 @@ static void path_writeback_flush(struct fakefs_db *fs) {
         bind_path(fs->stmt.path_create_path, 1, entry->path);
         sqlite3_bind_int64(fs->stmt.path_create_path, 2, entry->inode);
         db_exec_reset(fs, fs->stmt.path_create_path);
+    }
+    db_exec_reset(fs, fs->stmt.commit);
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[i];
+        if (!entry->dirty)
+            continue;
+        fakefs_clear_deferred_create_path(fs->root_fd, entry->path, &entry->stat);
         free(entry->path);
         entry->path = NULL;
         entry->dirty = false;
     }
-    db_exec_reset(fs, fs->stmt.commit);
     fs->path_writeback_count = 0;
+    unlinkat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, 0);
 }
 
 static void stat_writeback_flush(struct fakefs_db *fs) {
@@ -535,6 +619,68 @@ void path_rename(struct fakefs_db *fs, const char *src, const char *dst) {
     stat_cache_clear(fs);
 }
 
+static void fakefs_recover_pending_path(struct fakefs_db *fs, int fd, const char *path) {
+    struct fakefs_pending_create pending = {};
+    ssize_t size = fakefs_fgetxattr(fd, FAKEFS_PENDING_CREATE_XATTR, &pending, sizeof(pending));
+    if (size != sizeof(pending) ||
+            pending.magic != FAKEFS_PENDING_CREATE_MAGIC ||
+            pending.version != FAKEFS_PENDING_CREATE_VERSION)
+        return;
+    if (path_get_inode(fs, path) == 0)
+        path_create(fs, path, &pending.stat);
+    fakefs_clear_deferred_create_fd(fd);
+}
+
+static void fakefs_recover_pending_dir(struct fakefs_db *fs, int dir_fd, const char *dir_path) {
+    int dup_fd = dup(dir_fd);
+    if (dup_fd < 0)
+        return;
+    DIR *dir = fdopendir(dup_fd);
+    if (dir == NULL) {
+        close(dup_fd);
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+                strcmp(entry->d_name, FAKEFS_PENDING_CREATE_MARKER) == 0)
+            continue;
+
+        char path[MAX_PATH + 1];
+        if (strcmp(dir_path, "/") == 0) {
+            if (snprintf(path, sizeof(path), "/%s", entry->d_name) >= (int) sizeof(path))
+                continue;
+        } else {
+            if (snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name) >= (int) sizeof(path))
+                continue;
+        }
+
+        int fd = openat(dir_fd, entry->d_name, O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+            continue;
+        fakefs_recover_pending_path(fs, fd, path);
+
+        struct stat stat;
+        if (fstat(fd, &stat) == 0 && S_ISDIR(stat.st_mode))
+            fakefs_recover_pending_dir(fs, fd, path);
+        close(fd);
+    }
+    closedir(dir);
+}
+
+static void fakefs_recover_pending_creates(struct fakefs_db *fs) {
+    int marker = openat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, O_RDONLY | O_CLOEXEC);
+    if (marker < 0)
+        return;
+    close(marker);
+
+    db_exec_reset(fs, fs->stmt.begin_immediate);
+    fakefs_recover_pending_dir(fs, fs->root_fd, "/");
+    db_exec_reset(fs, fs->stmt.commit);
+    unlinkat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, 0);
+}
+
 #if DEBUG_sql
 static int trace_callback(unsigned UNUSED(why), void *UNUSED(fuck), void *stmt, void *_sql) {
     char *sql = _sql;
@@ -562,6 +708,7 @@ extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     memset(fs, 0, sizeof(*fs));
+    fs->root_fd = root_fd;
 
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
@@ -655,6 +802,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
             "where (path >= ? and path < ?) or path = ?");
     fs->stmt.path_from_inode = db_prepare(fs, "select path from paths where inode = ?");
     fs->stmt.try_cleanup_inode = db_prepare(fs, "delete from stats where inode = ? and not exists (select 1 from paths where inode = stats.inode)");
+    fakefs_recover_pending_creates(fs);
     return 0;
 }
 

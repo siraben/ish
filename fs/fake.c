@@ -28,6 +28,15 @@ static void fakefs_fd_cache_stat(struct fd *fd, struct fakefs_db *fs, const stru
     fd->fake_ishstat_valid = true;
 }
 
+static void fakefs_record_or_flush_deferred_create(struct mount *mount, int fd, const struct ish_stat *stat) {
+    struct fakefs_db *fs = &mount->fakefs;
+    if (fakefs_record_deferred_create(mount->root_fd, fd, stat))
+        return;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
+}
+
 static const char *fakefs_builtin_symlink(const char *path) {
     if (strcmp(path, "/dev/fd") == 0)
         return "/proc/self/fd";
@@ -81,6 +90,7 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
             realfs.unlink(mount, path);
             return ERR_PTR(_ENOMEM);
         }
+        fakefs_record_or_flush_deferred_create(mount, fd->real_fd, &ishstat);
         fakefs_fd_cache_stat(fd, fs, &ishstat);
         fd->ops = &fakefs_fdops;
         return fd;
@@ -119,6 +129,9 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
 // WARNING: giant hack, just for file providerws
 struct fd *fakefs_open_inode(struct mount *mount, ino_t inode) {
     struct fakefs_db *fs = &mount->fakefs;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
     db_begin_read(fs);
     sqlite3_stmt *stmt = fs->stmt.path_from_inode;
     sqlite3_bind_int64(stmt, 1, inode);
@@ -220,9 +233,9 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
         return errno_map();
     }
     ssize_t res = write(fd, target, strlen(target));
-    close(fd);
     if (res < 0) {
         int saved_errno = errno;
+        close(fd);
         unlinkat(mount->root_fd, fix_path(link), 0);
         errno = saved_errno;
         return errno_map();
@@ -238,9 +251,12 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     inode_t inode = path_defer_create(fs, link, &ishstat);
     sqlite3_mutex_leave(fs->lock);
     if (inode == 0) {
+        close(fd);
         unlinkat(mount->root_fd, fix_path(link), 0);
         return _ENOMEM;
     }
+    fakefs_record_or_flush_deferred_create(mount, fd, &ishstat);
+    close(fd);
     return 0;
 }
 
@@ -385,6 +401,15 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     if (inode == 0) {
         realfs.rmdir(mount, path);
         return _ENOMEM;
+    }
+    int fd = openat(mount->root_fd, fix_path(path), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd >= 0) {
+        fakefs_record_or_flush_deferred_create(mount, fd, &ishstat);
+        close(fd);
+    } else {
+        sqlite3_mutex_enter(fs->lock);
+        db_flush_deferred(fs);
+        sqlite3_mutex_leave(fs->lock);
     }
     return 0;
 }
