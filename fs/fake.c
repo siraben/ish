@@ -226,15 +226,11 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
     }
 
     struct fakefs_db *fs = &mount->fakefs;
-    db_begin_read(fs);
     struct ish_stat ishstat;
     ino_t inode;
-    if (!path_read_stat(fs, path, &ishstat, &inode)) {
-        db_rollback(fs);
+    if (!path_read_stat_cached(fs, path, &ishstat, &inode))
         return _ENOENT;
-    }
     int err = realfs.stat(mount, path, fake_stat);
-    db_commit(fs);
     if (err < 0)
         return err;
     fake_stat->inode = inode;
@@ -352,21 +348,16 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
     }
 
     struct fakefs_db *fs = &mount->fakefs;
-    db_begin_read(fs);
     struct ish_stat ishstat;
-    if (!path_read_stat(fs, path, &ishstat, NULL)) {
-        db_rollback(fs);
+    if (!path_read_stat_cached(fs, path, &ishstat, NULL))
         return _ENOENT;
-    }
     if (!S_ISLNK(ishstat.mode)) {
-        db_rollback(fs);
         return _EINVAL;
     }
 
     ssize_t err = realfs.readlink(mount, path, buf, bufsize);
     if (err == _EINVAL)
         err = file_readlink(mount, path, buf, bufsize);
-    db_commit(fs);
     return err;
 }
 
@@ -392,9 +383,7 @@ retry:
     }
 
     struct fakefs_db *fs = &fd->mount->fakefs;
-    db_begin_read(fs);
-    entry->inode = path_get_inode(fs, entry_path);
-    db_commit(fs);
+    entry->inode = path_get_inode_cached(fs, entry_path);
     // it's quite possible that due to some mishap there's no metadata for this file
     // so just skip this entry, instead of crashing the program, so there's hope for recovery
     if (entry->inode == 0)
