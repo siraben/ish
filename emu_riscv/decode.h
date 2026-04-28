@@ -573,6 +573,7 @@ static inline bool rv_decode_32(uint32_t insn, struct rv_insn *out) {
         case 0x05:
             name = out->funct3 == 0 ? "fmin" : out->funct3 == 1 ? "fmax" : NULL;
             break;
+        case 0x08: name = "fcvt"; break;
         case 0x14:
             name = out->funct3 == 0 ? "fle" : out->funct3 == 1 ? "flt" : out->funct3 == 2 ? "feq" : NULL;
             break;
@@ -591,7 +592,7 @@ static inline bool rv_decode_32(uint32_t insn, struct rv_insn *out) {
         }
         if (name == NULL) break;
         snprintf(out->mnemonic, sizeof(out->mnemonic), "%s%s", name, fmt);
-        if (funct5 == 0x14 || funct5 == 0x18 || funct5 == 0x19 || funct5 == 0x1c)
+        if (funct5 == 0x08 || funct5 == 0x14 || funct5 == 0x18 || funct5 == 0x19 || funct5 == 0x1c)
             rv_format_reg_reg(out, false, true, true);
         else
             rv_format_reg_reg(out, true, true, true);

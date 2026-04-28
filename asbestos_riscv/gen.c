@@ -338,6 +338,11 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                 else
                     return INT_UNDEFINED;
                 break;
+            case 0x08:
+                if (rs2 != 1)
+                    return INT_UNDEFINED;
+                rv_gadget_store_freg_s(cpu, rd, (float) rv_gadget_freg_d(cpu, rs1));
+                break;
             case 0x14:
                 if (rd != 0) {
                     if (funct3 == 0)
@@ -404,6 +409,11 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                     rv_gadget_store_freg_d(cpu, rd, fmax(a, b));
                 else
                     return INT_UNDEFINED;
+                break;
+            case 0x08:
+                if (rs2 != 0)
+                    return INT_UNDEFINED;
+                rv_gadget_store_freg_d(cpu, rd, (double) rv_gadget_freg_s(cpu, rs1));
                 break;
             case 0x14:
                 if (rd != 0) {

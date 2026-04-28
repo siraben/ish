@@ -98,11 +98,14 @@ int main(void) {
     put32(&flat, pc + 60, rv_encode_i(8, 3, 3, 1, 0x07));      // fld ft1,8(gp)
     put32(&flat, pc + 64, rv_encode_r(0x01, 1, 0, 0, 2, 0x53)); // fadd.d ft2,ft0,ft1
     put32(&flat, pc + 68, rv_encode_s(16, 2, 3, 3, 0x27));     // fsd ft2,16(gp)
-    put32(&flat, pc + 72, 0x0000000f);                         // fence
-    put32(&flat, pc + 76, 0x0000100f);                         // fence.i
-    put32(&flat, pc + 80, rv_encode_i(0x003, 7, 5, 28, 0x73)); // csrrwi t3,fcsr,7
-    put32(&flat, pc + 84, rv_encode_i(0x003, 0, 2, 29, 0x73)); // csrrs t4,fcsr,zero
-    put32(&flat, pc + 88, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
+    put32(&flat, pc + 72, rv_encode_r(0x20, 1, 2, 0, 3, 0x53)); // fcvt.s.d ft3,ft2
+    put32(&flat, pc + 76, rv_encode_r(0x21, 0, 3, 0, 4, 0x53)); // fcvt.d.s ft4,ft3
+    put32(&flat, pc + 80, rv_encode_s(24, 4, 3, 3, 0x27));     // fsd ft4,24(gp)
+    put32(&flat, pc + 84, 0x0000000f);                         // fence
+    put32(&flat, pc + 88, 0x0000100f);                         // fence.i
+    put32(&flat, pc + 92, rv_encode_i(0x003, 7, 5, 28, 0x73)); // csrrwi t3,fcsr,7
+    put32(&flat, pc + 96, rv_encode_i(0x003, 0, 2, 29, 0x73)); // csrrs t4,fcsr,zero
+    put32(&flat, pc + 100, rv_encode_i(0, 0, 0, 0, 0x73));     // ecall
     put_double(&flat, 0x380, 1.25);
     put_double(&flat, 0x388, 2.5);
 
@@ -124,9 +127,10 @@ int main(void) {
     assert(cpu.x[29] == 7);
     assert(cpu.x[30] == 15);
     assert(cpu.fcsr == 7);
-    assert(cpu.pc == pc + 92);
+    assert(cpu.pc == pc + 104);
     assert(get64(&flat, 0x300) == 20);
     assert(get_double(&flat, 0x390) == 3.75);
+    assert(get_double(&flat, 0x398) == 3.75);
 
     cpu_poke(&cpu);
     asbestos_free(flat.mmu.asbestos);

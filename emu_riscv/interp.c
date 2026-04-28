@@ -503,6 +503,11 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                 else
                     return raise_interrupt(cpu, INT_UNDEFINED);
                 break;
+            case 0x08:
+                if (insn.rs2 != 1)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_freg_s(cpu, insn.rd, (float) freg_d(cpu, insn.rs1));
+                break;
             case 0x14:
                 if (insn.funct3 == 0)
                     store_reg(cpu, insn.rd, a <= b);
@@ -563,6 +568,11 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                     store_freg_d(cpu, insn.rd, fmax(a, b));
                 else
                     return raise_interrupt(cpu, INT_UNDEFINED);
+                break;
+            case 0x08:
+                if (insn.rs2 != 0)
+                    return raise_interrupt(cpu, INT_UNDEFINED);
+                store_freg_d(cpu, insn.rd, (double) freg_s(cpu, insn.rs1));
                 break;
             case 0x14:
                 if (insn.funct3 == 0)
