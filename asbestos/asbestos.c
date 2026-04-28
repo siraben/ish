@@ -280,17 +280,20 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
 
     struct asbestos *asbestos = cpu->mmu->asbestos;
     lock(&asbestos->lock);
-    if (!list_empty(&asbestos->jetsam)) {
-        // write-lock the jetsam_lock to wait until other asbestos threads get
-        // to this point, so they will all clear out their block pointers
-        // TODO: use RCU for better performance
+    if (list_empty(&asbestos->jetsam)) {
         unlock(&asbestos->lock);
-        write_wrlock(&asbestos->jetsam_lock);
-        lock(&asbestos->lock);
-        fiber_free_jetsam(asbestos);
-        write_wrunlock(&asbestos->jetsam_lock);
+    } else {
+        // Freeing jetsam blocks requires excluding active readers. Do it only
+        // when the write lock is immediately available so cleanup cannot block
+        // guest threads from reaching their next interrupt/syscall boundary.
+        unlock(&asbestos->lock);
+        if (try_write_wrlock(&asbestos->jetsam_lock)) {
+            lock(&asbestos->lock);
+            fiber_free_jetsam(asbestos);
+            unlock(&asbestos->lock);
+            write_wrunlock(&asbestos->jetsam_lock);
+        }
     }
-    unlock(&asbestos->lock);
 
     return interrupt;
 }

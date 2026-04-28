@@ -660,8 +660,15 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         if (action->handler != SIG_IGN_)
             action->handler = SIG_DFL_;
     }
+    unlock(&current->sighand->lock);
+#if GUEST_RISCV64
+    current->altstack = 0;
+    current->altstack_size = 0;
+#else
+    lock(&current->sighand->lock);
     current->sighand->altstack = 0;
     unlock(&current->sighand->lock);
+#endif
 
     current->did_exec = true;
     vfork_notify(current);

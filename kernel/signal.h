@@ -21,11 +21,13 @@ struct sigaction_ {
     addr_t handler;
 #if GUEST_RISCV64
     qword_t flags;
+    sigset_t_ mask;
+    addr_t restorer;
 #else
     dword_t flags;
-#endif
     addr_t restorer;
     sigset_t_ mask;
+#endif
 #if GUEST_RISCV64
 };
 #else

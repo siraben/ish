@@ -139,6 +139,40 @@ static void store_freg_d(struct cpu_state *cpu, unsigned reg, double value) {
     memcpy(&cpu->f[reg], &value, sizeof(value));
 }
 
+static uint64_t fclass32(uint32_t bits) {
+    uint32_t sign = bits >> 31;
+    uint32_t exp = (bits >> 23) & 0xff;
+    uint32_t frac = bits & 0x7fffff;
+    if (exp == 0xff) {
+        if (frac == 0)
+            return sign ? (1u << 0) : (1u << 7);
+        return (frac & 0x400000) ? (1u << 9) : (1u << 8);
+    }
+    if (exp == 0) {
+        if (frac == 0)
+            return sign ? (1u << 3) : (1u << 4);
+        return sign ? (1u << 2) : (1u << 5);
+    }
+    return sign ? (1u << 1) : (1u << 6);
+}
+
+static uint64_t fclass64(uint64_t bits) {
+    uint64_t sign = bits >> 63;
+    uint64_t exp = (bits >> 52) & 0x7ff;
+    uint64_t frac = bits & UINT64_C(0x000fffffffffffff);
+    if (exp == 0x7ff) {
+        if (frac == 0)
+            return sign ? (1u << 0) : (1u << 7);
+        return (frac & UINT64_C(0x0008000000000000)) ? (1u << 9) : (1u << 8);
+    }
+    if (exp == 0) {
+        if (frac == 0)
+            return sign ? (1u << 3) : (1u << 4);
+        return sign ? (1u << 2) : (1u << 5);
+    }
+    return sign ? (1u << 1) : (1u << 6);
+}
+
 static uint64_t fp_to_int_s(float value, unsigned kind) {
     switch (kind) {
     case 0: return (uint64_t) (int64_t) (int32_t) value;
@@ -542,9 +576,15 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                 store_freg_s(cpu, insn.rd, int_to_fp_s(rs1, insn.rs2));
                 break;
             case 0x1c:
-                if (insn.funct3 != 0)
+                if (insn.funct3 == 0) {
+                    store_reg(cpu, insn.rd, (int32_t) (uint32_t) cpu->f[insn.rs1]);
+                } else if (insn.funct3 == 1) {
+                    uint64_t raw = cpu->f[insn.rs1];
+                    uint64_t boxed = raw >> 32;
+                    store_reg(cpu, insn.rd, boxed == UINT32_MAX ? fclass32(raw) : (1u << 9));
+                } else {
                     return raise_interrupt(cpu, INT_UNDEFINED);
-                store_reg(cpu, insn.rd, (int32_t) (uint32_t) cpu->f[insn.rs1]);
+                }
                 break;
             case 0x1e:
                 if (insn.funct3 != 0)
@@ -610,9 +650,12 @@ static int exec_one(struct cpu_state *cpu, struct tlb *tlb) {
                 store_freg_d(cpu, insn.rd, int_to_fp_d(rs1, insn.rs2));
                 break;
             case 0x1c:
-                if (insn.funct3 != 0)
+                if (insn.funct3 == 0)
+                    store_reg(cpu, insn.rd, cpu->f[insn.rs1]);
+                else if (insn.funct3 == 1)
+                    store_reg(cpu, insn.rd, fclass64(cpu->f[insn.rs1]));
+                else
                     return raise_interrupt(cpu, INT_UNDEFINED);
-                store_reg(cpu, insn.rd, cpu->f[insn.rs1]);
                 break;
             case 0x1e:
                 if (insn.funct3 != 0)

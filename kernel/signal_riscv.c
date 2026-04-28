@@ -13,6 +13,44 @@
 #include "fs/poll.h"
 
 static struct fd_ops signalfd_ops;
+static_assert(offsetof(struct sigaction_, mask) == 16, "riscv64 sigaction mask offset");
+
+struct rv_siginfo_ {
+    int_t sig;
+    int_t sig_errno;
+    int_t code;
+    int_t __pad0;
+    union {
+        struct {
+            pid_t_ pid;
+            uid_t_ uid;
+        } kill;
+        struct {
+            pid_t_ pid;
+            uid_t_ uid;
+            int_t status;
+            int_t __pad0;
+            qword_t utime;
+            qword_t stime;
+        } child;
+        struct {
+            addr_t addr;
+        } fault;
+        struct {
+            addr_t addr;
+            int_t syscall;
+        } sigsys;
+        struct {
+            int_t timer;
+            int_t overrun;
+            union sigval_ value;
+            int_t _private;
+        } timer;
+    };
+    uint8_t __pad[128 - 16 - 32];
+};
+static_assert(sizeof(struct rv_siginfo_) == 128, "riscv64 siginfo size");
+static_assert(offsetof(struct rv_siginfo_, fault.addr) == 16, "riscv64 siginfo si_addr offset");
 
 struct signalfd_siginfo_ {
     dword_t signo;
@@ -58,6 +96,18 @@ struct rv_d_fp_state {
     dword_t fcsr;
 };
 
+struct rv_q_fp_state {
+    qword_t f[64] __attribute__((aligned(16)));
+    dword_t fcsr;
+    dword_t reserved[3];
+};
+
+union rv_fp_state {
+    struct rv_d_fp_state d;
+    struct rv_q_fp_state q;
+};
+static_assert(sizeof(union rv_fp_state) == 528, "riscv64 fp state size");
+
 struct rv_ctx_hdr {
     dword_t magic;
     dword_t size;
@@ -71,10 +121,7 @@ struct rv_extra_ext_header {
 
 struct rv_sigcontext {
     struct rv_user_regs regs;
-    union {
-        struct rv_d_fp_state fpregs;
-        struct rv_extra_ext_header extdesc;
-    };
+    union rv_fp_state fpregs;
 };
 
 struct rv_ucontext {
@@ -91,10 +138,11 @@ struct rv_ucontext {
 };
 
 struct rv_rt_sigframe {
-    struct siginfo_ info;
+    struct rv_siginfo_ info;
     struct rv_ucontext uc;
     dword_t sigreturn_code[2];
 };
+static_assert(offsetof(struct rv_rt_sigframe, uc) == 128, "riscv64 rt_sigframe ucontext offset");
 static_assert(offsetof(struct rv_ucontext, mcontext) == 176, "riscv64 ucontext mcontext offset");
 
 static bool signal_is_blockable(int sig) {
@@ -119,6 +167,47 @@ static int signal_action(struct sighand *sighand, int sig) {
         default:
             return 1;
     }
+}
+
+static struct rv_siginfo_ rv_siginfo_from_siginfo(struct siginfo_ info) {
+    struct rv_siginfo_ user_info = {
+        .sig = info.sig,
+        .sig_errno = info.sig_errno,
+        .code = info.code,
+    };
+
+    switch (info.code) {
+    case SI_USER_:
+    case SI_TKILL_:
+        user_info.kill.pid = info.kill.pid;
+        user_info.kill.uid = info.kill.uid;
+        break;
+    case SI_TIMER_:
+        user_info.timer.timer = info.timer.timer;
+        user_info.timer.overrun = info.timer.overrun;
+        user_info.timer.value = info.timer.value;
+        user_info.timer._private = info.timer._private;
+        break;
+    default:
+        break;
+    }
+
+    if (info.sig == SIGCHLD_) {
+        user_info.child.pid = info.child.pid;
+        user_info.child.uid = info.child.uid;
+        user_info.child.status = info.child.status;
+        user_info.child.utime = info.child.utime;
+        user_info.child.stime = info.child.stime;
+    } else if (info.sig == SIGILL_ || info.sig == SIGFPE_ ||
+            info.sig == SIGSEGV_ || info.sig == SIGBUS_ ||
+            info.sig == SIGTRAP_) {
+        user_info.fault.addr = info.fault.addr;
+    } else if (info.sig == SIGSYS_) {
+        user_info.sigsys.addr = info.sigsys.addr;
+        user_info.sigsys.syscall = info.sigsys.syscall;
+    }
+
+    return user_info;
 }
 
 static sigset_t_ signalfd_sanitize_mask(sigset_t_ mask) {
@@ -186,8 +275,6 @@ struct sighand *sighand_copy(struct sighand *sighand) {
     if (copy == NULL)
         return NULL;
     memcpy(copy->action, sighand->action, sizeof(copy->action));
-    copy->altstack = sighand->altstack;
-    copy->altstack_size = sighand->altstack_size;
     return copy;
 }
 
@@ -338,17 +425,17 @@ static void restore_regs(struct rv_user_regs *regs) {
     cpu->t6 = regs->t6;
 }
 
-static bool is_on_altstack(addr_t sp, struct sighand *sighand) {
-    return sp > sighand->altstack && sp <= sighand->altstack + sighand->altstack_size;
+static bool is_on_altstack(addr_t sp) {
+    return sp > current->altstack && sp <= current->altstack + current->altstack_size;
 }
 
-static void altstack_to_user(struct sighand *sighand, struct stack_t_ *user_stack) {
-    user_stack->stack = sighand->altstack;
-    user_stack->size = sighand->altstack_size;
+static void altstack_to_user(struct stack_t_ *user_stack) {
+    user_stack->stack = current->altstack;
+    user_stack->size = current->altstack_size;
     user_stack->flags = 0;
-    if (sighand->altstack == 0)
+    if (current->altstack == 0)
         user_stack->flags |= SS_DISABLE_;
-    if (is_on_altstack(current->cpu.sp, sighand))
+    if (is_on_altstack(current->cpu.sp))
         user_stack->flags |= SS_ONSTACK_;
 }
 
@@ -356,23 +443,23 @@ static int setup_signal_handler(struct sigqueue *sigqueue) {
     int sig = sigqueue->info.sig;
     struct sigaction_ *action = &current->sighand->action[sig];
     addr_t sp = current->cpu.sp;
-    if ((action->flags & SA_ONSTACK_) && current->sighand->altstack != 0 &&
-            !is_on_altstack(sp, current->sighand)) {
-        sp = current->sighand->altstack + current->sighand->altstack_size;
+    if ((action->flags & SA_ONSTACK_) && current->altstack != 0 &&
+            !is_on_altstack(sp)) {
+        sp = current->altstack + current->altstack_size;
     }
     addr_t frame_addr = (sp - sizeof(struct rv_rt_sigframe)) & ~0xfUL;
     struct rv_rt_sigframe frame = {};
 
-    frame.info = sigqueue->info;
+    frame.info = rv_siginfo_from_siginfo(sigqueue->info);
     frame.uc.sigmask = current->blocked;
     struct stack_t_ stack;
-    altstack_to_user(current->sighand, &stack);
+    altstack_to_user(&stack);
     frame.uc.stack = stack.stack;
     frame.uc.stack_flags = stack.flags;
     frame.uc.stack_size = stack.size;
     save_regs(&frame.uc.mcontext.regs);
-    memcpy(frame.uc.mcontext.fpregs.f, current->cpu.f, sizeof(frame.uc.mcontext.fpregs.f));
-    frame.uc.mcontext.fpregs.fcsr = current->cpu.fcsr;
+    memcpy(frame.uc.mcontext.fpregs.d.f, current->cpu.f, sizeof(frame.uc.mcontext.fpregs.d.f));
+    frame.uc.mcontext.fpregs.d.fcsr = current->cpu.fcsr;
     frame.sigreturn_code[0] = 0x08b00893; // li a7, __NR_rt_sigreturn
     frame.sigreturn_code[1] = 0x00000073; // ecall
     if (user_put(frame_addr, frame))
@@ -506,8 +593,8 @@ dword_t sys_rt_sigreturn(void) {
         do_exit(128 + SIGSEGV_);
     current->blocked = frame.uc.sigmask & ~(sig_mask(SIGKILL_) | sig_mask(SIGSTOP_));
     restore_regs(&frame.uc.mcontext.regs);
-    memcpy(current->cpu.f, frame.uc.mcontext.fpregs.f, sizeof(current->cpu.f));
-    current->cpu.fcsr = frame.uc.mcontext.fpregs.fcsr;
+    memcpy(current->cpu.f, frame.uc.mcontext.fpregs.d.f, sizeof(current->cpu.f));
+    current->cpu.fcsr = frame.uc.mcontext.fpregs.d.fcsr;
     return current->cpu.a0;
 }
 
@@ -549,39 +636,28 @@ int_t sys_rt_sigpending(addr_t set_addr) {
 }
 
 dword_t sys_sigaltstack(addr_t ss_addr, addr_t old_ss_addr) {
-    struct sighand *sighand = current->sighand;
-    lock(&sighand->lock);
     if (old_ss_addr != 0) {
         struct stack_t_ old_ss;
-        altstack_to_user(sighand, &old_ss);
-        if (user_put(old_ss_addr, old_ss)) {
-            unlock(&sighand->lock);
+        altstack_to_user(&old_ss);
+        if (user_put(old_ss_addr, old_ss))
             return _EFAULT;
-        }
     }
     if (ss_addr != 0) {
-        if (is_on_altstack(current->cpu.sp, sighand)) {
-            unlock(&sighand->lock);
+        if (is_on_altstack(current->cpu.sp))
             return _EPERM;
-        }
         struct stack_t_ ss;
-        if (user_get(ss_addr, ss)) {
-            unlock(&sighand->lock);
+        if (user_get(ss_addr, ss))
             return _EFAULT;
-        }
         if (ss.flags & SS_DISABLE_) {
-            sighand->altstack = 0;
-            sighand->altstack_size = 0;
+            current->altstack = 0;
+            current->altstack_size = 0;
         } else {
-            if (ss.size < MINSIGSTKSZ_) {
-                unlock(&sighand->lock);
+            if (ss.size < MINSIGSTKSZ_)
                 return _ENOMEM;
-            }
-            sighand->altstack = ss.stack;
-            sighand->altstack_size = ss.size;
+            current->altstack = ss.stack;
+            current->altstack_size = ss.size;
         }
     }
-    unlock(&sighand->lock);
     return 0;
 }
 
@@ -645,8 +721,11 @@ found:
     struct siginfo_ info = sigqueue->info;
     free(sigqueue);
     unlock(&current->sighand->lock);
-    if (info_addr != 0 && user_put(info_addr, info))
-        return _EFAULT;
+    if (info_addr != 0) {
+        struct rv_siginfo_ user_info = rv_siginfo_from_siginfo(info);
+        if (user_put(info_addr, user_info))
+            return _EFAULT;
+    }
     return info.sig;
 }
 

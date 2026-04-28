@@ -259,6 +259,36 @@ static void rv_gadget_store_freg_d(struct cpu_state *cpu, unsigned reg, double v
     memcpy(&cpu->f[reg], &value, sizeof(value));
 }
 
+static uint64_t rv_gadget_fclass32(uint32_t bits) {
+    bool sign = bits >> 31;
+    uint32_t exp = (bits >> 23) & 0xff;
+    uint32_t frac = bits & 0x7fffff;
+
+    if (exp == 0xff) {
+        if (frac == 0)
+            return 1u << (sign ? 0 : 7);
+        return 1u << ((frac & 0x400000) ? 9 : 8);
+    }
+    if (exp == 0)
+        return 1u << (frac == 0 ? (sign ? 3 : 4) : (sign ? 2 : 5));
+    return 1u << (sign ? 1 : 6);
+}
+
+static uint64_t rv_gadget_fclass64(uint64_t bits) {
+    bool sign = bits >> 63;
+    uint64_t exp = (bits >> 52) & 0x7ff;
+    uint64_t frac = bits & UINT64_C(0xfffffffffffff);
+
+    if (exp == 0x7ff) {
+        if (frac == 0)
+            return 1u << (sign ? 0 : 7);
+        return 1u << ((frac & UINT64_C(0x8000000000000)) ? 9 : 8);
+    }
+    if (exp == 0)
+        return 1u << (frac == 0 ? (sign ? 3 : 4) : (sign ? 2 : 5));
+    return 1u << (sign ? 1 : 6);
+}
+
 static uint64_t rv_gadget_fp_to_int_s(float value, unsigned kind) {
     switch (kind) {
     case 0: return (uint64_t) (int64_t) (int32_t) value;
@@ -368,10 +398,18 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                 rv_gadget_store_freg_s(cpu, rd, rv_gadget_int_to_fp_s(xrs1, rs2));
                 break;
             case 0x1c:
-                if (funct3 != 0)
+                if (funct3 == 0) {
+                    if (rd != 0)
+                        cpu->x[rd] = (int32_t) (uint32_t) cpu->f[rs1];
+                } else if (funct3 == 1) {
+                    if (rd != 0) {
+                        uint64_t raw = cpu->f[rs1];
+                        cpu->x[rd] = raw >> 32 == UINT32_MAX ?
+                            rv_gadget_fclass32(raw) : (1u << 9);
+                    }
+                } else {
                     return INT_UNDEFINED;
-                if (rd != 0)
-                    cpu->x[rd] = (int32_t) (uint32_t) cpu->f[rs1];
+                }
                 break;
             case 0x1e:
                 if (funct3 != 0)
@@ -442,10 +480,15 @@ int rv_gadget_fp(struct cpu_state *cpu, const unsigned long *params) {
                 rv_gadget_store_freg_d(cpu, rd, rv_gadget_int_to_fp_d(xrs1, rs2));
                 break;
             case 0x1c:
-                if (funct3 != 0)
+                if (funct3 == 0) {
+                    if (rd != 0)
+                        cpu->x[rd] = cpu->f[rs1];
+                } else if (funct3 == 1) {
+                    if (rd != 0)
+                        cpu->x[rd] = rv_gadget_fclass64(cpu->f[rs1]);
+                } else {
                     return INT_UNDEFINED;
-                if (rd != 0)
-                    cpu->x[rd] = cpu->f[rs1];
+                }
                 break;
             case 0x1e:
                 if (funct3 != 0)

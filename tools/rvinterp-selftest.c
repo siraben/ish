@@ -51,11 +51,15 @@ static uint64_t get64(struct flat_mmu *flat, addr_t addr) {
     return value;
 }
 
+static void put64(struct flat_mmu *flat, addr_t addr, uint64_t value) {
+    for (unsigned i = 0; i < 8; i++)
+        flat->mem[addr + i] = (value >> (i * 8)) & 0xff;
+}
+
 static void put_double(struct flat_mmu *flat, addr_t addr, double value) {
     uint64_t bits;
     memcpy(&bits, &value, sizeof(bits));
-    for (unsigned i = 0; i < 8; i++)
-        flat->mem[addr + i] = (bits >> (i * 8)) & 0xff;
+    put64(flat, addr, bits);
 }
 
 static double get_double(struct flat_mmu *flat, addr_t addr) {
@@ -105,17 +109,36 @@ int main(void) {
     put32(&flat, pc + 88, 0x0000100f);                         // fence.i
     put32(&flat, pc + 92, rv_encode_i(0x003, 7, 5, 28, 0x73)); // csrrwi t3,fcsr,7
     put32(&flat, pc + 96, rv_encode_i(0x003, 0, 2, 29, 0x73)); // csrrs t4,fcsr,zero
-    put32(&flat, pc + 100, rv_encode_i(0, 0, 0, 0, 0x73));     // ecall
+    put32(&flat, pc + 100, rv_encode_r(0x71, 0, 0, 1, 18, 0x53)); // fclass.d s2,ft0
+    put32(&flat, pc + 104, rv_encode_i(32, 3, 3, 5, 0x07));     // fld ft5,32(gp)
+    put32(&flat, pc + 108, rv_encode_r(0x71, 0, 5, 1, 19, 0x53)); // fclass.d s3,ft5
+    put32(&flat, pc + 112, rv_encode_i(40, 3, 3, 6, 0x07));     // fld ft6,40(gp)
+    put32(&flat, pc + 116, rv_encode_r(0x71, 0, 6, 1, 20, 0x53)); // fclass.d s4,ft6
+    put32(&flat, pc + 120, rv_encode_i(48, 3, 2, 7, 0x07));     // flw ft7,48(gp)
+    put32(&flat, pc + 124, rv_encode_r(0x70, 0, 7, 1, 21, 0x53)); // fclass.s s5,ft7
+    put32(&flat, pc + 128, rv_encode_r(0x70, 0, 8, 1, 22, 0x53)); // fclass.s s6,fs0
+    put32(&flat, pc + 132, rv_encode_i(0, 0, 0, 0, 0x73));      // ecall
     put_double(&flat, 0x380, 1.25);
     put_double(&flat, 0x388, 2.5);
+    put64(&flat, 0x3a0, UINT64_C(0x7ff0000000000000));
+    put64(&flat, 0x3a8, UINT64_C(0x7ff8000000000000));
+    put32(&flat, 0x3b0, 0x80000000u);
 
     struct cpu_state cpu = {
         .mmu = &flat.mmu,
         .pc = pc,
         .sp = 0x300,
         .gp = 0x380,
+        .f[8] = 0x7f800000u,
     };
     int interrupt = cpu_run_to_interrupt(&cpu, &tlb);
+    if (interrupt != INT_SYSCALL) {
+        struct rv_insn insn = {};
+        rv_decode(&flat.mem[cpu.pc], sizeof(flat.mem) - cpu.pc, &insn);
+        fprintf(stderr, "unexpected interrupt %d at pc %#llx: %s %s raw=%#x expanded=%#x funct3=%u funct7=%u\n",
+                interrupt, (unsigned long long) cpu.pc, insn.mnemonic, insn.operands,
+                insn.raw, insn.expanded, insn.funct3, insn.funct7);
+    }
     assert(interrupt == INT_SYSCALL);
     assert(cpu.a0 == 15);
     assert(cpu.a1 == 5);
@@ -126,8 +149,13 @@ int main(void) {
     assert(cpu.x[28] == 0);
     assert(cpu.x[29] == 7);
     assert(cpu.x[30] == 15);
+    assert(cpu.s2 == (1u << 6));
+    assert(cpu.s3 == (1u << 7));
+    assert(cpu.s4 == (1u << 9));
+    assert(cpu.s5 == (1u << 3));
+    assert(cpu.s6 == (1u << 9));
     assert(cpu.fcsr == 7);
-    assert(cpu.pc == pc + 104);
+    assert(cpu.pc == pc + 136);
     assert(get64(&flat, 0x300) == 20);
     assert(get_double(&flat, 0x390) == 3.75);
     assert(get_double(&flat, 0x398) == 3.75);

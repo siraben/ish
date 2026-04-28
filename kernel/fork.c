@@ -130,6 +130,12 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     if (flags & CLONE_CHILD_CLEARTID_)
         task->clear_tid = ctid_addr;
     task->exit_signal = flags & CSIGNAL_;
+#if GUEST_RISCV64
+    if ((flags & CLONE_VM_) && !(flags & CLONE_VFORK_)) {
+        task->altstack = 0;
+        task->altstack_size = 0;
+    }
+#endif
 
     // remember to do CLONE_SYSVSEM
     return 0;
