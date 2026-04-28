@@ -82,6 +82,25 @@ fd_t sys_openat(fd_t at_f, addr_t path_addr, dword_t flags, mode_t_ mode) {
     return f_install(fd, flags);
 }
 
+struct open_how_ {
+    qword_t flags;
+    qword_t mode;
+    qword_t resolve;
+};
+
+fd_t sys_openat2(fd_t at_f, addr_t path_addr, addr_t how_addr, dword_t size) {
+    struct open_how_ how = {};
+    if (size < sizeof(how))
+        return _EINVAL;
+    if (user_read(how_addr, &how, sizeof(how)))
+        return _EFAULT;
+    if ((how.flags >> 32) != 0 || (how.mode >> 32) != 0)
+        return _EINVAL;
+    if (how.resolve != 0)
+        return _EINVAL;
+    return sys_openat(at_f, path_addr, how.flags, how.mode);
+}
+
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode) {
     return sys_openat(AT_FDCWD_, path_addr, flags, mode);
 }
@@ -812,16 +831,27 @@ dword_t sys_fchmod(fd_t f, dword_t mode) {
     return generic_fsetattr(fd, make_attr(mode, mode));
 }
 
-dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode) {
+dword_t sys_fchmodat2(fd_t at_f, addr_t path_addr, dword_t mode, dword_t flags) {
     char path[MAX_PATH];
     if (user_read_string(path_addr, path, sizeof(path)))
         return _EFAULT;
-    STRACE("fchmodat(%d, \"%s\", %o)", at_f, path, mode);
+    STRACE("fchmodat2(%d, \"%s\", %o, %#x)", at_f, path, mode, flags);
+    if (flags & ~(AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_))
+        return _EINVAL;
+    if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH_))
+            return _ENOENT;
+        return sys_fchmod(at_f, mode);
+    }
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
     mode &= ~S_IFMT;
-    return generic_setattrat(at, path, make_attr(mode, mode), true);
+    return generic_setattrat(at, path, make_attr(mode, mode), !(flags & AT_SYMLINK_NOFOLLOW_));
+}
+
+dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode) {
+    return sys_fchmodat2(at_f, path_addr, mode, 0);
 }
 
 dword_t sys_chmod(addr_t path_addr, dword_t mode) {

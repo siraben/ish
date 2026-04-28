@@ -1,9 +1,13 @@
 #include <string.h>
 #include "kernel/calls.h"
 
+#define PRCTL_SET_PDEATHSIG_ 1
+#define PRCTL_GET_PDEATHSIG_ 2
 #define PRCTL_SET_KEEPCAPS_ 8
 #define PRCTL_SET_NAME_ 15
 #define PRCTL_SET_SECCOMP_ 22
+#define PRCTL_SET_NO_NEW_PRIVS_ 38
+#define PRCTL_GET_NO_NEW_PRIVS_ 39
 
 #define SECCOMP_SET_MODE_STRICT_ 0
 #define SECCOMP_SET_MODE_FILTER_ 1
@@ -27,14 +31,36 @@ static int_t seccomp_set_mode(dword_t mode, dword_t flags) {
     }
 }
 
-int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(arg4), uint_t UNUSED(arg5)) {
+int_t sys_prctl(dword_t option, uint_t arg2, uint_t arg3, uint_t arg4, uint_t arg5) {
     switch (option) {
+        case PRCTL_SET_PDEATHSIG_:
+            STRACE("prctl(PR_SET_PDEATHSIG, %u)", arg2);
+            if (arg2 >= NUM_SIGS)
+                return _EINVAL;
+            current->parent_death_signal = arg2;
+            return 0;
+        case PRCTL_GET_PDEATHSIG_:
+            STRACE("prctl(PR_GET_PDEATHSIG, %#x)", arg2);
+            if (user_put(arg2, current->parent_death_signal))
+                return _EFAULT;
+            return 0;
         case PRCTL_SET_KEEPCAPS_:
             // stub
             return 0;
         case PRCTL_SET_SECCOMP_:
             STRACE("prctl(PR_SET_SECCOMP, %#x)", arg2);
             return seccomp_set_mode(arg2, 0);
+        case PRCTL_SET_NO_NEW_PRIVS_:
+            STRACE("prctl(PR_SET_NO_NEW_PRIVS, %u)", arg2);
+            if (arg2 != 1 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+                return _EINVAL;
+            current->no_new_privs = true;
+            return 0;
+        case PRCTL_GET_NO_NEW_PRIVS_:
+            STRACE("prctl(PR_GET_NO_NEW_PRIVS)");
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+                return _EINVAL;
+            return current->no_new_privs ? 1 : 0;
         case PRCTL_SET_NAME_: {
             char name[16];
             if (user_read_string(arg2, name, sizeof(name) - 1))

@@ -67,6 +67,8 @@ struct task {
     struct task *parent;
     struct list children;
     struct list siblings;
+    int parent_death_signal;
+    bool no_new_privs;
 
     addr_t clear_tid;
     addr_t robust_list;

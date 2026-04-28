@@ -57,6 +57,140 @@ static sqword_t rv_sys_riscv_hwprobe(qword_t pairs_addr, qword_t pair_count,
     return 0;
 }
 
+struct rv_clone_args_ {
+    qword_t flags;
+    qword_t pidfd;
+    qword_t child_tid;
+    qword_t parent_tid;
+    qword_t exit_signal;
+    qword_t stack;
+    qword_t stack_size;
+    qword_t tls;
+    qword_t set_tid;
+    qword_t set_tid_size;
+    qword_t cgroup;
+};
+
+#define RV_CLONE_DETACHED_ 0x00400000u
+#define RV_CSIGNAL_ 0xffu
+
+static sqword_t rv_sys_clone3(qword_t args_addr, qword_t size,
+        qword_t UNUSED(a2), qword_t UNUSED(a3), qword_t UNUSED(a4), qword_t UNUSED(a5)) {
+    struct rv_clone_args_ args = {};
+    if (size < 64)
+        return _EINVAL;
+    if (size > sizeof(args))
+        size = sizeof(args);
+    if (user_read(args_addr, &args, size))
+        return _EFAULT;
+    if ((args.flags >> 32) != 0 || args.exit_signal > RV_CSIGNAL_)
+        return _EINVAL;
+    if (args.flags & RV_CLONE_DETACHED_)
+        return _EINVAL;
+    if (args.pidfd || args.set_tid || args.set_tid_size || args.cgroup)
+        return _ENOSYS;
+
+    addr_t stack = args.stack;
+    if (stack != 0)
+        stack += args.stack_size;
+    return rv_ret32(sys_clone((dword_t) (args.flags | args.exit_signal), stack,
+            args.parent_tid, args.tls, args.child_tid));
+}
+
+static int_t timespec_to_ms(struct timespec_ timeout) {
+    if (timeout.sec < 0 || timeout.nsec < 0 || timeout.nsec >= 1000000000)
+        return _EINVAL;
+    qword_t ms = (qword_t) timeout.sec * 1000 + ((qword_t) timeout.nsec + 999999) / 1000000;
+    if (ms > INT32_MAX)
+        return INT32_MAX;
+    return (int_t) ms;
+}
+
+static sqword_t rv_sys_epoll_pwait2(qword_t epoll_f, qword_t events_addr,
+        qword_t max_events, qword_t timeout_addr, qword_t sigmask_addr, qword_t sigsetsize) {
+    int_t timeout = -1;
+    if (timeout_addr != 0) {
+        struct timespec_ timeout_ts;
+        if (user_get(timeout_addr, timeout_ts))
+            return _EFAULT;
+        timeout = timespec_to_ms(timeout_ts);
+        if (timeout < 0)
+            return timeout;
+    }
+    return rv_ret32(sys_epoll_pwait((fd_t) epoll_f, (addr_t) events_addr,
+            (int_t) max_events, timeout, (addr_t) sigmask_addr, (dword_t) sigsetsize));
+}
+
+#define RV_FUTEX2_SIZE_MASK_ 0x3u
+#define RV_FUTEX2_SIZE_U32_ 0x2u
+#define RV_FUTEX2_PRIVATE_ 0x80u
+
+static bool rv_futex2_flags_supported(qword_t flags) {
+    return (flags & ~(RV_FUTEX2_SIZE_MASK_ | RV_FUTEX2_PRIVATE_)) == 0 &&
+        (flags & RV_FUTEX2_SIZE_MASK_) == RV_FUTEX2_SIZE_U32_;
+}
+
+static sqword_t rv_sys_futex_wake(qword_t uaddr, qword_t mask, qword_t nr,
+        qword_t flags, qword_t UNUSED(a4), qword_t UNUSED(a5)) {
+    if (!rv_futex2_flags_supported(flags))
+        return _EINVAL;
+    if (mask == 0)
+        return _EINVAL;
+    return rv_ret32(sys_futex((addr_t) uaddr, 1 | 128, (dword_t) nr, 0, 0, 0));
+}
+
+static sqword_t rv_sys_futex_wait(qword_t uaddr, qword_t val, qword_t mask,
+        qword_t flags, qword_t timeout_addr, qword_t clockid) {
+    if (!rv_futex2_flags_supported(flags))
+        return _EINVAL;
+    if (mask == 0)
+        return _EINVAL;
+    if (clockid != CLOCK_MONOTONIC_ && clockid != CLOCK_REALTIME_)
+        return _EINVAL;
+    return rv_ret32(sys_futex((addr_t) uaddr, 0 | 128, (dword_t) val,
+            (addr_t) timeout_addr, 0, 0));
+}
+
+struct rv_futex_waitv_ {
+    qword_t val;
+    qword_t uaddr;
+    dword_t flags;
+    dword_t reserved;
+};
+
+static sqword_t rv_sys_futex_waitv(qword_t waiters_addr, qword_t nr_futexes,
+        qword_t flags, qword_t timeout_addr, qword_t clockid, qword_t UNUSED(a5)) {
+    if (flags != 0 || nr_futexes == 0)
+        return _EINVAL;
+    if (nr_futexes != 1)
+        return _ENOSYS;
+    struct rv_futex_waitv_ waiter;
+    if (user_get(waiters_addr, waiter))
+        return _EFAULT;
+    if (waiter.reserved != 0 || !rv_futex2_flags_supported(waiter.flags))
+        return _EINVAL;
+    if (clockid != CLOCK_MONOTONIC_ && clockid != CLOCK_REALTIME_)
+        return _EINVAL;
+    dword_t err = sys_futex((addr_t) waiter.uaddr, 0 | 128, (dword_t) waiter.val,
+            (addr_t) timeout_addr, 0, 0);
+    return err == 0 ? 0 : rv_ret32(err);
+}
+
+static sqword_t rv_sys_futex_requeue(qword_t waiters_addr, qword_t flags,
+        qword_t nr_wake, qword_t nr_requeue, qword_t UNUSED(a4), qword_t UNUSED(a5)) {
+    if (flags != 0)
+        return _EINVAL;
+    struct rv_futex_waitv_ waiters[2];
+    if (user_read(waiters_addr, waiters, sizeof(waiters)))
+        return _EFAULT;
+    for (int i = 0; i < 2; i++) {
+        if (waiters[i].reserved != 0 || !rv_futex2_flags_supported(waiters[i].flags))
+            return _EINVAL;
+    }
+    return rv_ret32(sys_futex((addr_t) waiters[0].uaddr, 3 | 128, (dword_t) nr_wake,
+            (addr_t) nr_requeue, (addr_t) waiters[1].uaddr, 0));
+}
+
 #define RV_WRAP0(name) \
     static sqword_t rv_##name(qword_t UNUSED(a0), qword_t UNUSED(a1), qword_t UNUSED(a2), \
             qword_t UNUSED(a3), qword_t UNUSED(a4), qword_t UNUSED(a5)) { \
@@ -135,7 +269,9 @@ RV_WRAP5(sys_fchownat, fd_t, addr_t, dword_t, dword_t, int)
 RV_WRAP3(sys_fchown32, fd_t, dword_t, dword_t)
 RV_WRAP3(sys_fchmodat, fd_t, addr_t, dword_t)
 RV_WRAP4(sys_openat, fd_t, addr_t, dword_t, mode_t_)
+RV_WRAP4(sys_openat2, fd_t, addr_t, addr_t, dword_t)
 RV_WRAP1(sys_close, fd_t)
+RV_WRAP3(sys_close_range, dword_t, dword_t, dword_t)
 RV_WRAP2(sys_flock, fd_t, dword_t)
 RV_WRAP2(sys_pipe2, addr_t, int_t)
 RV_WRAP3(sys_getdents64, fd_t, addr_t, dword_t)
@@ -270,6 +406,7 @@ RV_WRAP3(sys_seccomp, dword_t, dword_t, addr_t)
 RV_WRAP3(sys_getrandom, addr_t, dword_t, dword_t)
 RV_WRAP6(sys_copy_file_range, fd_t, addr_t, fd_t, addr_t, dword_t, uint_t)
 RV_WRAP5(sys_statx, fd_t, addr_t, int_t, uint_t, addr_t)
+RV_WRAP4(sys_fchmodat2, fd_t, addr_t, dword_t, dword_t)
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -518,9 +655,29 @@ syscall_t syscall_table[] = {
     [292] = rv_stub, // AIO not modeled.
     [293] = rv_stub, // rseq registration not honored by scheduler yet.
     [294] = rv_stub, // kexec is a real-kernel boot operation.
-    [424 ... 438] = rv_stub, // pidfd, io_uring, and mount API require kernel objects.
+    [424 ... 434] = rv_stub, // pidfd, io_uring, and mount API require kernel objects.
+    [435] = rv_sys_clone3,
+    [436] = rv_sys_close_range,
+    [437] = rv_sys_openat2,
+    [438] = rv_stub, // pidfd_getfd requires pidfd objects.
     [439] = rv_sys_faccessat,
-    [440 ... 471] = rv_stub, // newer kernel-global APIs are not modeled yet.
+    [440] = rv_stub, // process_madvise needs cross-task memory advice.
+    [441] = rv_sys_epoll_pwait2,
+    [442 ... 443] = rv_stub, // mount attributes and quota state are host-kernel policy.
+    [444 ... 446] = rv_stub, // Landlock needs an LSM ruleset object model.
+    [447 ... 448] = rv_stub, // memfd_secret and process_mrelease need kernel VM/task objects.
+    [449] = rv_sys_futex_waitv,
+    [450 ... 451] = rv_stub, // NUMA policy and cachestat are not modeled.
+    [452] = rv_sys_fchmodat2,
+    [453] = rv_stub, // shadow stacks are architecture/kernel-managed.
+    [454] = rv_sys_futex_wake,
+    [455] = rv_sys_futex_wait,
+    [456] = rv_sys_futex_requeue,
+    [457 ... 461] = rv_stub, // new mount and LSM inspection APIs need kernel-global state.
+    [462] = rv_success_stub, // mseal is advisory without VMA seal enforcement here.
+    [463 ... 466] = rv_sys_xattr_stub,
+    [467 ... 469] = rv_stub, // newer mount/file attribute APIs are not represented yet.
+    [470 ... 471] = rv_stub,
 };
 #if defined(__clang__)
 #pragma clang diagnostic pop
