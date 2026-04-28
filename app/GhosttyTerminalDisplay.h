@@ -25,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) CGSize characterSize;
 @property (nonatomic) BOOL terminalFocused;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
+@property (nonatomic, readonly) BOOL hasSelection;
 
 - (void)writeBytes:(const void *)bytes length:(size_t)length completion:(void (^)(void))completion;
 - (void)updateFontFamily:(NSString *)fontFamily
@@ -39,7 +40,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)scrollToRowOffset:(NSUInteger)rowOffset;
 - (void)clearScrollback;
 - (void)copyScreenToPasteboard;
+- (void)copySelectionToPasteboard;
 - (BOOL)applicationCursorMode;
+- (void)beginSelectionAtPoint:(CGPoint)point;
+- (void)updateSelectionAtPoint:(CGPoint)point;
+- (void)clearSelection;
+- (CGRect)selectionBoundingRect;
 
 @end
 

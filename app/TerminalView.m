@@ -31,6 +31,8 @@ struct rowcol {
 @property CGSize floatingCursorSensitivity;
 @property CGSize actualFloatingCursorSensitivity;
 @property BOOL updatingScrollOffsetFromTerminal;
+@property UITapGestureRecognizer *focusTapGesture;
+@property UILongPressGestureRecognizer *selectionGesture;
 
 @end
 
@@ -66,6 +68,15 @@ struct rowcol {
 
     self.markedRange = [UITextRange new];
     self.selectedRange = [UITextRange new];
+
+    self.focusTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTerminal:)];
+    self.focusTapGesture.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:self.focusTapGesture];
+
+    self.selectionGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectTerminalText:)];
+    self.selectionGesture.minimumPressDuration = 0.35;
+    self.selectionGesture.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:self.selectionGesture];
 }
 
 - (void)dealloc {
@@ -192,6 +203,46 @@ struct rowcol {
 
 - (IBAction)loseFocus:(id)sender {
     [self resignFirstResponder];
+}
+
+- (void)focusTerminal:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded)
+        return;
+    if (self.terminal.displayView.hasSelection) {
+        [self.terminal.displayView clearSelection];
+        return;
+    }
+    [self becomeFirstResponder];
+}
+
+- (void)selectTerminalText:(UILongPressGestureRecognizer *)recognizer {
+    GhosttyTerminalDisplay *displayView = self.terminal.displayView;
+    CGPoint point = [recognizer locationInView:displayView];
+    switch (recognizer.state) {
+        case UIGestureRecognizerStateBegan:
+            [self becomeFirstResponder];
+            [displayView beginSelectionAtPoint:point];
+            break;
+        case UIGestureRecognizerStateChanged:
+            [displayView updateSelectionAtPoint:point];
+            break;
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+            [displayView updateSelectionAtPoint:point];
+            [self showSelectionMenu];
+            break;
+        default:
+            break;
+    }
+}
+
+- (void)showSelectionMenu {
+    if (!self.terminal.displayView.hasSelection)
+        return;
+    UIMenuController *menu = UIMenuController.sharedMenuController;
+    CGRect targetRect = [self.terminal.displayView selectionBoundingRect];
+    [menu setTargetRect:targetRect inView:self.terminal.displayView];
+    [menu setMenuVisible:YES animated:YES];
 }
 
 - (void)willMoveToWindow:(UIWindow *)newWindow {
@@ -347,7 +398,18 @@ struct rowcol {
 }
 
 - (void)copy:(id)sender {
-    [self.terminal.displayView copyScreenToPasteboard];
+    if (self.terminal.displayView.hasSelection)
+        [self.terminal.displayView copySelectionToPasteboard];
+    else
+        [self.terminal.displayView copyScreenToPasteboard];
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    if (action == @selector(copy:))
+        return self.terminal.displayView.hasSelection;
+    if (action == @selector(paste:))
+        return UIPasteboard.generalPasteboard.string != nil;
+    return [super canPerformAction:action withSender:sender];
 }
 
 - (void)clearScrollback:(UIKeyCommand *)command {

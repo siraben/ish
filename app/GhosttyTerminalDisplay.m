@@ -8,6 +8,7 @@
 #import "GhosttyTerminalDisplay.h"
 #import "Theme.h"
 
+#import <CoreText/CoreText.h>
 #import <QuartzCore/QuartzCore.h>
 
 #define GHOSTTY_STATIC 1
@@ -66,10 +67,33 @@ static UIFont *TerminalFontForFamily(NSString *fontFamily, CGFloat size, UIFontW
     return boldDescriptor ? [UIFont fontWithDescriptor:boldDescriptor size:size] : font;
 }
 
-static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
+static CGFloat PixelRound(CGFloat value, CGFloat scale) {
     if (scale <= 0)
         scale = 1;
-    return ceil(value * scale) / scale;
+    return round(value * scale) / scale;
+}
+
+static CGFloat TerminalASCIIAdvance(UIFont *font) {
+    enum { CharacterCount = 127 - 32 };
+    UniChar characters[CharacterCount] = {};
+    for (NSUInteger i = 0; i < CharacterCount; i++)
+        characters[i] = (UniChar) (32 + i);
+
+    CTFontRef ctFont = (__bridge CTFontRef) font;
+    CGGlyph glyphs[CharacterCount] = {};
+    if (!CTFontGetGlyphsForCharacters(ctFont, characters, glyphs, CharacterCount))
+        return [@"W" sizeWithAttributes:@{NSFontAttributeName: font}].width;
+
+    CGSize advances[CharacterCount] = {};
+    CTFontGetAdvancesForGlyphs(ctFont, kCTFontOrientationHorizontal, glyphs, advances, CharacterCount);
+
+    CGFloat maxAdvance = 0;
+    for (NSUInteger i = 0; i < CharacterCount; i++)
+        maxAdvance = MAX(maxAdvance, advances[i].width);
+
+    if (maxAdvance <= 0)
+        maxAdvance = [@"W" sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    return maxAdvance;
 }
 
 @interface GhosttyTerminalDisplay ()
@@ -99,6 +123,12 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
     CFTimeInterval _benchmarkVTTime;
     CFTimeInterval _benchmarkRenderTime;
     CFTimeInterval _benchmarkDrawTime;
+    NSMutableArray<NSMutableArray<NSString *> *> *_visibleCells;
+    BOOL _hasSelection;
+    NSInteger _selectionAnchorRow;
+    NSInteger _selectionAnchorColumn;
+    NSInteger _selectionFocusRow;
+    NSInteger _selectionFocusColumn;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -114,6 +144,7 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
         self.columns = DefaultColumns;
         self.rows = DefaultRows;
         _benchmarkEnabled = [NSProcessInfo.processInfo.environment[@"ISH_BENCH_TERMINAL_DISPLAY"] boolValue];
+        _visibleCells = [NSMutableArray new];
 
         [self updateCharacterSize];
 
@@ -152,13 +183,13 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
 }
 
 - (void)updateCharacterSize {
-    NSDictionary *attributes = @{NSFontAttributeName: self.regularFont};
-    CGSize size = [@"W" sizeWithAttributes:attributes];
     CGFloat scale = self.window.screen.scale ?: UIScreen.mainScreen.scale;
-    CGFloat width = size.width + CellWidthAdjustment;
-    CGFloat height = self.regularFont.lineHeight;
-    self.characterSize = CGSizeMake(MAX(1, PixelCeil(width, scale)),
-                                    MAX(1, PixelCeil(height, scale)));
+    CGFloat width = TerminalASCIIAdvance(self.regularFont) + CellWidthAdjustment;
+    CGFloat height = self.regularFont.ascender - self.regularFont.descender + self.regularFont.leading;
+    if (height <= 0)
+        height = self.regularFont.lineHeight;
+    self.characterSize = CGSizeMake(MAX(1, PixelRound(width, scale)),
+                                    MAX(1, PixelRound(height, scale)));
 }
 
 - (void)resizeTerminalToBounds {
@@ -217,6 +248,53 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
         return;
     _needsRenderStateUpdate = NO;
     ghostty_render_state_update(_renderState, _terminal);
+    [self updateVisibleCells];
+}
+
+- (void)updateVisibleCells {
+    [_visibleCells removeAllObjects];
+    for (int row = 0; row < self.rows; row++) {
+        NSMutableArray<NSString *> *cells = [NSMutableArray arrayWithCapacity:self.columns];
+        for (int column = 0; column < self.columns; column++)
+            [cells addObject:@" "];
+        [_visibleCells addObject:cells];
+    }
+
+    if (_renderState == NULL || _rowIterator == NULL || _rowCells == NULL)
+        return;
+    if (ghostty_render_state_get(_renderState, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &_rowIterator) != GHOSTTY_SUCCESS)
+        return;
+
+    int row = 0;
+    while (row < self.rows && ghostty_render_state_row_iterator_next(_rowIterator)) {
+        if (ghostty_render_state_row_get(_rowIterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &_rowCells) != GHOSTTY_SUCCESS) {
+            row++;
+            continue;
+        }
+        int column = 0;
+        while (column < self.columns && ghostty_render_state_row_cells_next(_rowCells)) {
+            uint32_t graphemeLength = 0;
+            ghostty_render_state_row_cells_get(_rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &graphemeLength);
+            if (graphemeLength > 0) {
+                uint32_t stackGraphemes[8] = {};
+                NSMutableData *heapGraphemes = nil;
+                void *graphemeBytes = stackGraphemes;
+                size_t graphemeBytesLength = graphemeLength * sizeof(uint32_t);
+                if (graphemeLength > sizeof(stackGraphemes) / sizeof(stackGraphemes[0])) {
+                    heapGraphemes = [NSMutableData dataWithLength:graphemeBytesLength];
+                    graphemeBytes = heapGraphemes.mutableBytes;
+                }
+                ghostty_render_state_row_cells_get(_rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, graphemeBytes);
+                NSString *text = [[NSString alloc] initWithBytes:graphemeBytes
+                                                          length:graphemeBytesLength
+                                                        encoding:NSUTF32LittleEndianStringEncoding];
+                if (text.length > 0)
+                    _visibleCells[row][column] = text;
+            }
+            column++;
+        }
+        row++;
+    }
 }
 
 - (void)updateFontFamily:(NSString *)fontFamily
@@ -332,6 +410,120 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
     ghostty_formatter_free(formatter);
 }
 
+- (BOOL)hasSelection {
+    return _hasSelection;
+}
+
+- (void)beginSelectionAtPoint:(CGPoint)point {
+    [self updateSelectionEndpointAtPoint:point anchor:YES];
+}
+
+- (void)updateSelectionAtPoint:(CGPoint)point {
+    [self updateSelectionEndpointAtPoint:point anchor:NO];
+}
+
+- (void)updateSelectionEndpointAtPoint:(CGPoint)point anchor:(BOOL)anchor {
+    if (self.columns <= 0 || self.rows <= 0)
+        return;
+
+    NSInteger column = (NSInteger) floor(point.x / MAX(1, self.characterSize.width));
+    NSInteger row = (NSInteger) floor(point.y / MAX(1, self.characterSize.height));
+    column = MAX(0, MIN((NSInteger) self.columns - 1, column));
+    row = MAX(0, MIN((NSInteger) self.rows - 1, row));
+
+    if (anchor) {
+        _selectionAnchorRow = row;
+        _selectionAnchorColumn = column;
+        _hasSelection = YES;
+    }
+    _selectionFocusRow = row;
+    _selectionFocusColumn = column;
+    [self setNeedsDisplay];
+}
+
+- (void)clearSelection {
+    if (!_hasSelection)
+        return;
+    _hasSelection = NO;
+    [self setNeedsDisplay];
+}
+
+- (void)copySelectionToPasteboard {
+    NSString *selection = [self selectedText];
+    if (selection.length > 0)
+        UIPasteboard.generalPasteboard.string = selection;
+}
+
+- (NSString *)selectedText {
+    if (!_hasSelection || _visibleCells.count == 0)
+        return nil;
+
+    NSInteger startRow = _selectionAnchorRow;
+    NSInteger startColumn = _selectionAnchorColumn;
+    NSInteger endRow = _selectionFocusRow;
+    NSInteger endColumn = _selectionFocusColumn;
+    if (startRow > endRow || (startRow == endRow && startColumn > endColumn)) {
+        NSInteger tmp = startRow;
+        startRow = endRow;
+        endRow = tmp;
+        tmp = startColumn;
+        startColumn = endColumn;
+        endColumn = tmp;
+    }
+
+    NSMutableArray<NSString *> *lines = [NSMutableArray new];
+    for (NSInteger row = startRow; row <= endRow && row < (NSInteger) _visibleCells.count; row++) {
+        NSArray<NSString *> *cells = _visibleCells[row];
+        NSInteger firstColumn = row == startRow ? startColumn : 0;
+        NSInteger lastColumn = row == endRow ? endColumn : (NSInteger) cells.count - 1;
+        NSMutableString *line = [NSMutableString new];
+        for (NSInteger column = firstColumn; column <= lastColumn && column < (NSInteger) cells.count; column++)
+            [line appendString:cells[column]];
+        while ([line hasSuffix:@" "])
+            [line deleteCharactersInRange:NSMakeRange(line.length - 1, 1)];
+        [lines addObject:line];
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+- (CGRect)selectionBoundingRect {
+    if (!_hasSelection)
+        return CGRectZero;
+    NSInteger startRow = MIN(_selectionAnchorRow, _selectionFocusRow);
+    NSInteger endRow = MAX(_selectionAnchorRow, _selectionFocusRow);
+    NSInteger startColumn = MIN(_selectionAnchorColumn, _selectionFocusColumn);
+    NSInteger endColumn = MAX(_selectionAnchorColumn, _selectionFocusColumn);
+    return CGRectMake(startColumn * self.characterSize.width,
+                      startRow * self.characterSize.height,
+                      MAX(1, endColumn - startColumn + 1) * self.characterSize.width,
+                      MAX(1, endRow - startRow + 1) * self.characterSize.height);
+}
+
+- (BOOL)isCellSelectedAtRow:(NSInteger)row column:(NSInteger)column {
+    if (!_hasSelection)
+        return NO;
+
+    NSInteger startRow = _selectionAnchorRow;
+    NSInteger startColumn = _selectionAnchorColumn;
+    NSInteger endRow = _selectionFocusRow;
+    NSInteger endColumn = _selectionFocusColumn;
+    if (startRow > endRow || (startRow == endRow && startColumn > endColumn)) {
+        NSInteger tmp = startRow;
+        startRow = endRow;
+        endRow = tmp;
+        tmp = startColumn;
+        startColumn = endColumn;
+        endColumn = tmp;
+    }
+    if (row < startRow || row > endRow)
+        return NO;
+    if (row == startRow && column < startColumn)
+        return NO;
+    if (row == endRow && column > endColumn)
+        return NO;
+    return YES;
+}
+
 - (void)updateScrollbar {
     GhosttyTerminalScrollbar scrollbar = {};
     if (_terminal == NULL || ghostty_terminal_get(_terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar) != GHOSTTY_SUCCESS)
@@ -380,6 +572,12 @@ static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
             if (ghostty_render_state_row_cells_get(_rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg) == GHOSTTY_SUCCESS) {
                 [UIColorFromGhosttyColor(bg) setFill];
                 CGContextFillRect(context, cellRect);
+            }
+            if ([self isCellSelectedAtRow:row column:column]) {
+                [[UIColor systemBlueColor] setFill];
+                CGContextSetAlpha(context, 0.45);
+                CGContextFillRect(context, cellRect);
+                CGContextSetAlpha(context, 1);
             }
 
             uint32_t graphemeLength = 0;
