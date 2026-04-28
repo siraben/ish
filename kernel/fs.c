@@ -1,6 +1,7 @@
 #include "debug.h"
 #include <limits.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <sys/stat.h>
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -243,8 +244,82 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
 }
 
 #define SYSCALL_IO_BUFFER_SIZE (64 * 1024)
+#define DIRECT_IO_MIN_SIZE (16 * 1024)
+#define DIRECT_IOV_MAX 64
 
 static _Thread_local char syscall_io_buffer[SYSCALL_IO_BUFFER_SIZE];
+
+static int build_user_iov(addr_t addr, size_t size, int prot, struct iovec *iov, int *iovcnt) {
+    addr_t p = addr;
+    int count = 0;
+    size_t remaining = size;
+    while (remaining != 0 && count < DIRECT_IOV_MAX) {
+        addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
+        size_t chunk = chunk_end - p;
+        if (chunk > remaining)
+            chunk = remaining;
+        void *ptr = mem_ptr(current->mem, p, prot);
+        if (ptr == NULL)
+            return _EFAULT;
+        iov[count].iov_base = ptr;
+        iov[count].iov_len = chunk;
+        count++;
+        p += chunk;
+        remaining -= chunk;
+    }
+    *iovcnt = count;
+    return 0;
+}
+
+static ssize_t sys_read_direct(struct fd *fd, addr_t buf_addr, size_t size) {
+    if (!S_ISREG(fd->type) || fd->ops->readv == NULL || size < DIRECT_IO_MIN_SIZE)
+        return _ENOSYS;
+
+    ssize_t total = 0;
+    while ((size_t) total < size) {
+        struct iovec iov[DIRECT_IOV_MAX];
+        int iovcnt = 0;
+        read_wrlock(&current->mem->lock);
+        int err = build_user_iov(buf_addr + total, size - total, MEM_WRITE, iov, &iovcnt);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return total != 0 ? total : err;
+        }
+        ssize_t res = fd->ops->readv(fd, iov, iovcnt);
+        read_wrunlock(&current->mem->lock);
+        if (res <= 0)
+            return total != 0 ? total : res;
+        total += res;
+        if (res < (ssize_t) iov[0].iov_len || iovcnt == 1)
+            break;
+    }
+    return total;
+}
+
+static ssize_t sys_write_direct(struct fd *fd, addr_t buf_addr, size_t size) {
+    if (!S_ISREG(fd->type) || fd->ops->writev == NULL || size < DIRECT_IO_MIN_SIZE)
+        return _ENOSYS;
+
+    ssize_t total = 0;
+    while ((size_t) total < size) {
+        struct iovec iov[DIRECT_IOV_MAX];
+        int iovcnt = 0;
+        read_wrlock(&current->mem->lock);
+        int err = build_user_iov(buf_addr + total, size - total, MEM_READ, iov, &iovcnt);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return total != 0 ? total : err;
+        }
+        ssize_t res = fd->ops->writev(fd, iov, iovcnt);
+        read_wrunlock(&current->mem->lock);
+        if (res <= 0)
+            return total != 0 ? total : res;
+        total += res;
+        if (res < (ssize_t) iov[0].iov_len || iovcnt == 1)
+            break;
+    }
+    return total;
+}
 
 static ssize_t sys_read_fd(struct fd *fd, void *buf, size_t size) {
     if (S_ISDIR(fd->type))
@@ -286,6 +361,9 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
         return _EISDIR;
     if (fd->ops->zero_read)
         return user_memset_bytes(buf_addr, 0, size) ? _EFAULT : size;
+    ssize_t direct_res = sys_read_direct(fd, buf_addr, size);
+    if (direct_res != _ENOSYS)
+        return direct_res;
 
     char *buf = syscall_io_buffer;
     if (size > SYSCALL_IO_BUFFER_SIZE)
@@ -330,6 +408,9 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
         return _EBADF;
     if (fd->ops->discard_write)
         return sys_write_fd(fd, NULL, size);
+    ssize_t direct_res = sys_write_direct(fd, buf_addr, size);
+    if (direct_res != _ENOSYS)
+        return direct_res;
 
     char *buf = syscall_io_buffer;
     if (size > SYSCALL_IO_BUFFER_SIZE)

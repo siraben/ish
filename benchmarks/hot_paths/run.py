@@ -27,6 +27,8 @@ BENCHMARKS = [
     Benchmark("mandelbrot", None, None, "self", "/tmp/bench-hot-paths/bin/mandelbrot"),
     Benchmark("file_io", None, 16 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_io"),
     Benchmark("file_io_small", None, 8 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_io_small"),
+    Benchmark("file_copy", None, 48 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_copy"),
+    Benchmark("file_copy_64k", None, 48 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_copy_64k"),
     Benchmark("file_random_write", None, 24 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_random_write"),
     Benchmark("pipe_throughput", None, 32 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/pipe_throughput"),
     Benchmark("dev_urandom_stream", None, 16 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/dev_urandom_stream"),
