@@ -70,10 +70,10 @@ static int pty_slave_open(struct tty *tty) {
 }
 
 static int pty_slave_close(struct tty *tty) {
-    // If userland's reference count on the pty slave will go to 0,
-    // hang up the pty master.  But the session leader may have a
-    // reference, and the pty master always has a reference.
-    if (tty->refcount - 1 == (tty->session ? 2 : 1)) {
+    // If userland's last open file reference on the pty slave is closing,
+    // hang up the pty master.  Session/control references do not keep the
+    // slave side open for read/poll EOF purposes.
+    if (tty->file_refs == 1) {
         pty_hangup_other(tty);
     }
     return 0;

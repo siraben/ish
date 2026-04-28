@@ -24,6 +24,7 @@ struct tty *tty_alloc(struct tty_driver *driver, int type, int num) {
         return NULL;
 
     tty->refcount = 0;
+    tty->file_refs = 0;
     tty->driver = driver;
     tty->type = type;
     tty->num = num;
@@ -136,6 +137,9 @@ int tty_open(struct tty *tty, struct fd *fd) {
     lock(&tty->fds_lock);
     list_add(&tty->fds, &fd->tty_other_fds);
     unlock(&tty->fds_lock);
+    lock(&tty->lock);
+    tty->file_refs++;
+    unlock(&tty->lock);
 
     if (!(fd->flags & O_NOCTTY_)) {
         // Make this our controlling terminal if:
@@ -205,6 +209,10 @@ static int tty_close(struct fd *fd) {
         lock(&ttys_lock);
         if (tty->driver->ops->close)
             tty->driver->ops->close(tty);
+        lock(&tty->lock);
+        assert(tty->file_refs > 0);
+        tty->file_refs--;
+        unlock(&tty->lock);
         tty_release(tty);
         unlock(&ttys_lock);
     }
@@ -408,7 +416,7 @@ static bool pty_is_half_closed_master(struct tty *tty) {
     struct tty *slave = tty->pty.other;
     // only time one tty lock is nested in another
     lock(&slave->lock);
-    bool half_closed = slave->ever_opened && (slave->refcount == 1 || slave->hung_up);
+    bool half_closed = slave->ever_opened && (slave->file_refs == 0 || slave->hung_up);
     unlock(&slave->lock);
     return half_closed;
 }
