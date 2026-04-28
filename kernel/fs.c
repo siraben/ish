@@ -242,6 +242,8 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
     return sys_mknodat(AT_FDCWD_, path_addr, mode, dev);
 }
 
+#define SYSCALL_IO_STACK_SIZE (16 * 1024)
+
 static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
@@ -271,7 +273,10 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
 
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     STRACE("read(%d, 0x%x, %d)", fd_no, buf_addr, size);
-    char *buf = (char *) malloc(size);
+    char stack_buf[SYSCALL_IO_STACK_SIZE];
+    char *buf = stack_buf;
+    if (size > sizeof(stack_buf))
+        buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
     int_t res = sys_read_buf(fd_no, buf, size);
@@ -279,7 +284,8 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
         if (user_write(buf_addr, buf, res))
             res = _EFAULT;
     }
-    free(buf);
+    if (buf != stack_buf)
+        free(buf);
     return res;
 }
 
@@ -303,8 +309,10 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
 }
 
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
-    // FIXME this is a DOS vector, should ideally use vectorized I/O
-    char *buf = malloc(size);
+    char stack_buf[SYSCALL_IO_STACK_SIZE];
+    char *buf = stack_buf;
+    if (size > sizeof(stack_buf))
+        buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
     dword_t res = _EFAULT;
@@ -317,7 +325,8 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
 
     res = sys_write_buf(fd_no, buf, size);
 out:
-    free(buf);
+    if (buf != stack_buf)
+        free(buf);
     return res;
 }
 
