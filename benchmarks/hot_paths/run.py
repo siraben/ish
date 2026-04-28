@@ -23,6 +23,7 @@ BENCHMARKS = [
     Benchmark("shell_control", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/shell_control.sh"),
     Benchmark("shell_pipeline", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/shell_pipeline.sh"),
     Benchmark("fs_metadata", None, None, "time", "/bin/sh /tmp/bench-hot-paths/guest/fs_metadata.sh"),
+    Benchmark("recursive_ls_deep", "/bin/ls", None, "time", "/bin/sh /tmp/bench-hot-paths/guest/recursive_ls_deep.sh"),
     Benchmark("prime_sieve", None, None, "self", "/tmp/bench-hot-paths/bin/prime_sieve"),
     Benchmark("mandelbrot", None, None, "self", "/tmp/bench-hot-paths/bin/mandelbrot"),
     Benchmark("file_io", None, 16 * 1024 * 1024, "self", "/tmp/bench-hot-paths/bin/file_io"),
