@@ -78,6 +78,7 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
         sqlite3_mutex_leave(fs->lock);
         if (fd->fake_inode == 0) {
             fd_close(fd);
+            realfs.unlink(mount, path);
             return ERR_PTR(_ENOMEM);
         }
         fakefs_fd_cache_stat(fd, fs, &ishstat);

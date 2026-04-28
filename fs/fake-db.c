@@ -409,6 +409,7 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     if (exists) {
         found_inode = sqlite3_column_int64(fs->stmt.path_read_stat, 0);
         found_stat = *(struct ish_stat *) sqlite3_column_blob(fs->stmt.path_read_stat, 1);
+        stat_writeback_lookup(fs, found_inode, &found_stat);
         if (inode)
             *inode = found_inode;
         if (stat)
