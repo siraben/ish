@@ -100,13 +100,17 @@ fs_metadata	-	time	/bin/sh /tmp/bench-hot-paths/guest/fs_metadata.sh
 prime_sieve	-	self	/tmp/bench-hot-paths/bin/prime_sieve
 mandelbrot	-	self	/tmp/bench-hot-paths/bin/mandelbrot
 file_io	-	self	/tmp/bench-hot-paths/bin/file_io
+file_io_small	-	self	/tmp/bench-hot-paths/bin/file_io_small
 pipe_throughput	-	self	/tmp/bench-hot-paths/bin/pipe_throughput
+memory_stream	-	self	/tmp/bench-hot-paths/bin/memory_stream
 branch_chaining	-	self	/tmp/bench-hot-paths/bin/branch_chaining
 call_return	-	self	/tmp/bench-hot-paths/bin/call_return
 hot_regs	-	self	/tmp/bench-hot-paths/bin/hot_regs
 gzip_payload	-	time	/bin/sh /tmp/bench-hot-paths/guest/gzip_payload.sh
 python_startup	/usr/bin/python3	time	/usr/bin/python3 -S -c "pass"
 python_compute	/usr/bin/python3	time	/usr/bin/python3 /tmp/bench-hot-paths/guest/python_compute.py
+python_memory	/usr/bin/python3	time	/usr/bin/python3 /tmp/bench-hot-paths/guest/python_memory.py
+python_file_io	/usr/bin/python3	time	/usr/bin/python3 /tmp/bench-hot-paths/guest/python_file_io.py
 python_imports	/usr/bin/python3	time	/usr/bin/python3 /tmp/bench-hot-paths/guest/python_imports.py
 bash_control	/bin/bash	time	/bin/bash /tmp/bench-hot-paths/guest/bash_control.sh
 EOF
