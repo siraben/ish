@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdint.h>
 #include "debug.h"
 #include "kernel/fs.h"
 #include "fs/fd.h"
@@ -121,20 +122,19 @@ dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t 
 
 struct poll_context {
     struct pollfd_ *polls;
-    struct fd **files;
+    int *group_next;
     int nfds;
 };
 #define POLL_ALWAYS_LISTENING (POLL_ERR|POLL_HUP|POLL_NVAL)
 static int poll_event_callback(void *context, int types, union poll_fd_info info) {
     struct poll_context *c = context;
     struct pollfd_ *polls = c->polls;
-    int nfds = c->nfds;
     int res = 0;
-    for (int i = 0; i < nfds; i++) {
-        if (c->files[i] == info.ptr) {
-            polls[i].revents = types & (polls[i].events | POLL_ALWAYS_LISTENING);
-            res = 1;
-        }
+    for (int i = (int) info.num; i >= 0 && i < c->nfds; i = c->group_next[i]) {
+        int revents = types & (polls[i].events | POLL_ALWAYS_LISTENING);
+        polls[i].revents = revents;
+        if (revents)
+            res++;
     }
     return res;
 }
@@ -153,36 +153,58 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
     STRACE("...\n");
 
     struct fd *files[nfds];
+    int group_next[nfds];
+    int group_events[nfds];
+    int group_root[nfds];
     for (unsigned i = 0; i < nfds; i++) {
-        files[i] = f_get(polls[i].fd);
+        files[i] = polls[i].fd < 0 ? NULL : f_get(polls[i].fd);
         if (files[i] != NULL)
             // FIXME it might have been closed by now by another thread
             fd_retain(files[i]);
         // clear revents, which is reused to mark whether a pollfd has been added or not
         polls[i].revents = 0;
+        group_next[i] = -1;
+        group_events[i] = 0;
+        group_root[i] = 0;
     }
 
-    // convert polls array into poll_add_fd calls
-    // FIXME this is quadratic
+    unsigned group_table_size = 1;
+    while (group_table_size < nfds * 2)
+        group_table_size <<= 1;
+    int group_table[group_table_size];
+    for (unsigned i = 0; i < group_table_size; i++)
+        group_table[i] = -1;
+
+    // convert polls array into one poll_add_fd call per unique open file
     for (unsigned i = 0; i < nfds; i++) {
-        if (polls[i].fd < 0 || polls[i].revents)
+        if (polls[i].fd < 0 || files[i] == NULL)
             continue;
 
-        // if the same fd is listed more than once, merge the events bits together
-        int events = polls[i].events;
-        polls[i].revents = 1;
-        if (files[i] == NULL)
-            continue;
-        for (unsigned j = 0; j < nfds; j++) {
-            if (polls[j].revents)
-                continue;
-            if (files[i] == files[j]) {
-                events |= polls[j].events;
-                polls[j].revents = 1;
+        uintptr_t hash = (uintptr_t) files[i] >> 4;
+        unsigned slot = hash & (group_table_size - 1);
+        int found = 0;
+        while (group_table[slot] != -1) {
+            int root = group_table[slot];
+            if (files[root] == files[i]) {
+                group_events[root] |= polls[i].events;
+                group_next[i] = group_next[root];
+                group_next[root] = i;
+                found = 1;
+                break;
             }
+            slot = (slot + 1) & (group_table_size - 1);
         }
+        if (found)
+            continue;
 
-        poll_add_fd(poll, files[i], events | POLL_ALWAYS_LISTENING, (union poll_fd_info) (void *) files[i]);
+        group_table[slot] = i;
+        group_events[i] = polls[i].events;
+        group_root[i] = 1;
+    }
+
+    for (unsigned i = 0; i < nfds; i++) {
+        if (group_root[i])
+            poll_add_fd(poll, files[i], group_events[i] | POLL_ALWAYS_LISTENING, (union poll_fd_info) (uint64_t) i);
     }
 
     for (unsigned i = 0; i < nfds; i++) {
@@ -190,7 +212,7 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
         if (polls[i].fd >= 0 && files[i] == NULL)
             polls[i].revents = POLL_NVAL;
     }
-    struct poll_context context = {polls, files, nfds};
+    struct poll_context context = {polls, group_next, nfds};
     struct timespec timeout_ts;
     if (timeout >= 0) {
         timeout_ts.tv_sec = timeout / 1000;

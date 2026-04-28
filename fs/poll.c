@@ -228,8 +228,9 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                 poll_types &= ~poll_fd->triggered_types;
             }
             if (poll_types) {
-                if (callback(context, poll_types, poll_fd->info) == 1)
-                    res++;
+                int callback_res = callback(context, poll_types, poll_fd->info);
+                if (callback_res > 0)
+                    res += callback_res;
 
                 // The real poll does not actually get the FDs set as oneshot.
                 // But this loop is done while holding the lock, so only one
