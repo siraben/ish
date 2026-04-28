@@ -416,6 +416,10 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     return MAX(0, self.rows) * MAX(0, self.columns);
 }
 
+- (UIFont *)selectionFont {
+    return self.regularFont;
+}
+
 - (void)beginSelectionAtPoint:(CGPoint)point {
     NSInteger offset = [self cellOffsetAtPoint:point];
     [self setSelectionFromCellOffset:offset toCellOffset:MIN(offset + 1, self.cellCount)];
@@ -515,6 +519,21 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         [rects addObject:[NSValue valueWithCGRect:rect]];
     }
     return rects;
+}
+
+- (NSString *)visibleText {
+    if (_visibleCells.count == 0)
+        return @"";
+    NSMutableArray<NSString *> *lines = [NSMutableArray arrayWithCapacity:_visibleCells.count];
+    for (NSArray<NSString *> *cells in _visibleCells) {
+        NSMutableString *line = [NSMutableString new];
+        for (NSString *cell in cells)
+            [line appendString:cell];
+        while ([line hasSuffix:@" "])
+            [line deleteCharactersInRange:NSMakeRange(line.length - 1, 1)];
+        [lines addObject:line];
+    }
+    return [lines componentsJoinedByString:@"\n"];
 }
 
 - (BOOL)isCellSelectedAtRow:(NSInteger)row column:(NSInteger)column {

@@ -79,6 +79,8 @@ struct rowcol {
 @property CGSize actualFloatingCursorSensitivity;
 @property BOOL updatingScrollOffsetFromTerminal;
 @property UITapGestureRecognizer *focusTapGesture;
+@property UITapGestureRecognizer *selectionTapGesture;
+@property UITextView *selectionTextView;
 @property (nonatomic) id<UIInteraction> textInteraction;
 
 @end
@@ -121,10 +123,26 @@ struct rowcol {
     self.focusTapGesture.cancelsTouchesInView = NO;
     [self addGestureRecognizer:self.focusTapGesture];
 
-    if (@available(iOS 13.0, *)) {
-        self.textInteraction = [UITextInteraction textInteractionForMode:UITextInteractionModeEditable];
-        [self addInteraction:self.textInteraction];
-    }
+    UITextView *selectionTextView = self.selectionTextView = [[UITextView alloc] initWithFrame:self.bounds];
+    selectionTextView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    selectionTextView.backgroundColor = UIColor.clearColor;
+    selectionTextView.opaque = NO;
+    selectionTextView.editable = NO;
+    selectionTextView.selectable = YES;
+    selectionTextView.scrollEnabled = NO;
+    selectionTextView.textContainerInset = UIEdgeInsetsZero;
+    selectionTextView.textContainer.lineFragmentPadding = 0;
+    selectionTextView.textContainer.lineBreakMode = NSLineBreakByClipping;
+    selectionTextView.textColor = [UIColor colorWithWhite:1 alpha:0.01];
+    selectionTextView.tintColor = UIColor.systemBlueColor;
+    selectionTextView.autocorrectionType = UITextAutocorrectionTypeNo;
+    selectionTextView.spellCheckingType = UITextSpellCheckingTypeNo;
+    selectionTextView.hidden = YES;
+    [self addSubview:selectionTextView];
+
+    self.selectionTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTerminal:)];
+    self.selectionTapGesture.cancelsTouchesInView = NO;
+    [selectionTextView addGestureRecognizer:self.selectionTapGesture];
 }
 
 - (void)dealloc {
@@ -170,6 +188,9 @@ struct rowcol {
 
     self.scrollbarView.contentView = displayView;
     [self.scrollbarView addSubview:displayView];
+    self.selectionTextView.hidden = NO;
+    [self bringSubviewToFront:self.selectionTextView];
+    [self updateSelectionTextView];
 }
 
 - (void)uninstallTerminalView {
@@ -184,6 +205,8 @@ struct rowcol {
     self.scrollbarView.contentView = nil;
     _terminal.enableVoiceOverAnnounce = NO;
     _terminal.displayView.delegate = _terminal;
+    self.selectionTextView.hidden = YES;
+    self.selectionTextView.text = @"";
 }
 
 #pragma mark Styling
@@ -208,6 +231,7 @@ struct rowcol {
                                     blinkCursor:prefs.blinkCursor
                                     cursorShape:prefs.htermCursorShape];
     [self updateFloatingCursorSensitivity];
+    [self updateSelectionTextView];
 }
 
 - (void)setOverrideFontSize:(CGFloat)overrideFontSize {
@@ -260,6 +284,7 @@ struct rowcol {
         self.selectedTextRange = [TerminalTextRange rangeWithStart:0 end:0];
         return;
     }
+    self.selectionTextView.selectedRange = NSMakeRange(0, 0);
     [self becomeFirstResponder];
 }
 
@@ -290,11 +315,13 @@ struct rowcol {
         return;
     CGFloat row = scrollView.contentOffset.y / MAX(1, self.terminal.displayView.characterSize.height);
     [self.terminal.displayView scrollToRowOffset:(NSUInteger) llround(row)];
+    [self updateSelectionTextView];
 }
 
 - (void)ghosttyTerminalDisplayDidResize:(GhosttyTerminalDisplay *)display columns:(int)columns rows:(int)rows {
     [self.terminal ghosttyTerminalDisplayDidResize:display columns:columns rows:rows];
     [self updateFloatingCursorSensitivity];
+    [self updateSelectionTextView];
 }
 
 - (void)ghosttyTerminalDisplay:(GhosttyTerminalDisplay *)display writePtyBytes:(const uint8_t *)bytes length:(size_t)length {
@@ -312,6 +339,19 @@ struct rowcol {
         [self.scrollbarView setContentOffset:contentOffset animated:NO];
     self.updatingScrollOffsetFromTerminal = NO;
     (void) visibleRows;
+    [self updateSelectionTextView];
+}
+
+- (void)updateSelectionTextView {
+    if (!self.terminal.loaded)
+        return;
+    GhosttyTerminalDisplay *displayView = self.terminal.displayView;
+    self.selectionTextView.font = displayView.selectionFont;
+    self.selectionTextView.text = displayView.visibleText;
+    self.selectionTextView.frame = self.bounds;
+    CGSize textContainerSize = CGSizeMake(MAX(self.bounds.size.width, displayView.columns * displayView.characterSize.width),
+                                          MAX(self.bounds.size.height, displayView.rows * displayView.characterSize.height));
+    self.selectionTextView.textContainer.size = textContainerSize;
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {

@@ -27,6 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
 @property (nonatomic, readonly) BOOL hasSelection;
 @property (nonatomic, readonly) NSInteger cellCount;
+@property (nonatomic, readonly) UIFont *selectionFont;
 
 - (void)writeBytes:(const void *)bytes length:(size_t)length completion:(void (^)(void))completion;
 - (void)updateFontFamily:(NSString *)fontFamily
@@ -52,6 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)textInCellRange:(NSRange)range;
 - (CGRect)firstRectForCellRange:(NSRange)range;
 - (NSArray<NSValue *> *)rectsForCellRange:(NSRange)range;
+- (NSString *)visibleText;
 
 @end
 
