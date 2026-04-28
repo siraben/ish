@@ -28,18 +28,10 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
-    if (is_signal_pending(lock))
+static int wait_for_impl(cond_t *cond, lock_t *lock, struct timespec *timeout, bool ignore_signals) {
+    if (!ignore_signals && is_signal_pending(lock))
         return _EINTR;
-    int err = wait_for_ignore_signals(cond, lock, timeout);
-    if (err < 0)
-        return _ETIMEDOUT;
-    if (is_signal_pending(lock))
-        return _EINTR;
-    return 0;
-}
 
-int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout) {
     if (current) {
         lock(&current->waiting_cond_lock);
         current->waiting_cond = cond;
@@ -47,28 +39,31 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
         unlock(&current->waiting_cond_lock);
     }
     int rc = 0;
+    bool should_wait = ignore_signals || !is_signal_pending(lock);
 #if LOCK_DEBUG
     struct lock_debug lock_tmp = lock->debug;
     lock->debug = (struct lock_debug) { .initialized = lock->debug.initialized };
 #endif
-    if (!timeout) {
-        pthread_cond_wait(&cond->cond, &lock->m);
-    } else {
+    if (should_wait) {
+        if (!timeout) {
+            pthread_cond_wait(&cond->cond, &lock->m);
+        } else {
 #if __linux__
-        struct timespec abs_timeout;
-        clock_gettime(CLOCK_MONOTONIC, &abs_timeout);
-        abs_timeout.tv_sec += timeout->tv_sec;
-        abs_timeout.tv_nsec += timeout->tv_nsec;
-        if (abs_timeout.tv_nsec > 1000000000) {
-            abs_timeout.tv_sec++;
-            abs_timeout.tv_nsec -= 1000000000;
-        }
-        rc = pthread_cond_timedwait(&cond->cond, &lock->m, &abs_timeout);
+            struct timespec abs_timeout;
+            clock_gettime(CLOCK_MONOTONIC, &abs_timeout);
+            abs_timeout.tv_sec += timeout->tv_sec;
+            abs_timeout.tv_nsec += timeout->tv_nsec;
+            if (abs_timeout.tv_nsec > 1000000000) {
+                abs_timeout.tv_sec++;
+                abs_timeout.tv_nsec -= 1000000000;
+            }
+            rc = pthread_cond_timedwait(&cond->cond, &lock->m, &abs_timeout);
 #elif __APPLE__
-        rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, timeout);
+            rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, timeout);
 #else
 #error Unimplemented pthread_cond_wait relative timeout.
 #endif
+        }
     }
 #if LOCK_DEBUG
     lock->debug = lock_tmp;
@@ -82,7 +77,17 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
     }
     if (rc == ETIMEDOUT)
         return _ETIMEDOUT;
+    if (!ignore_signals && is_signal_pending(lock))
+        return _EINTR;
     return 0;
+}
+
+int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+    return wait_for_impl(cond, lock, timeout, false);
+}
+
+int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+    return wait_for_impl(cond, lock, timeout, true);
 }
 
 void notify(cond_t *cond) {
@@ -128,4 +133,3 @@ void sigusr1_handler() {
         }
     }
 #endif
-

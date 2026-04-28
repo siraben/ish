@@ -31,6 +31,37 @@ static bool exit_tgroup(struct task *task) {
 
 void (*exit_hook)(struct task *task, int code) = NULL;
 
+static void send_parent_signal(struct task *parent, int sig, struct siginfo_ info) {
+    if (sig == 0)
+        return;
+    struct task *target = parent;
+    lock(&parent->sighand->lock);
+    if (sig == SIGCHLD_ && parent->sighand->action[SIGCHLD_].handler == SIG_IGN_) {
+        unlock(&parent->sighand->lock);
+        return;
+    }
+    struct task *thread;
+    list_for_each_entry(&parent->group->threads, thread, group_links) {
+        if (sigset_has(thread->waiting, sig)) {
+            target = thread;
+            break;
+        }
+    }
+    if (!sigset_has(target->waiting, sig) && sigset_has(target->blocked, sig)) {
+        list_for_each_entry(&parent->group->threads, thread, group_links) {
+            if (!sigset_has(thread->blocked, sig)) {
+                target = thread;
+                break;
+            }
+        }
+    }
+    unlock(&parent->sighand->lock);
+    if (sig == SIGCHLD_)
+        deliver_signal(target, sig, info);
+    else
+        send_signal(target, sig, info);
+}
+
 static struct task *find_new_parent(struct task *task) {
     struct task *new_parent;
     list_for_each_entry(&task->group->threads, new_parent, group_links) {
@@ -84,9 +115,12 @@ noreturn void do_exit(int status) {
     struct task *new_parent = find_new_parent(current);
     struct task *child, *tmp;
     list_for_each_entry_safe(&current->children, child, tmp, siblings) {
+        int parent_death_signal = child->parent_death_signal;
         child->parent = new_parent;
         list_remove(&child->siblings);
         list_add(&new_parent->children, &child->siblings);
+        if (parent_death_signal != 0)
+            send_signal(child, parent_death_signal, SIGINFO_NIL);
     }
 
     if (exit_tgroup(current)) {
@@ -107,7 +141,7 @@ noreturn void do_exit(int status) {
                 .child.stime = clock_from_timeval(group_rusage.stime),
             };
             if (leader->exit_signal != 0)
-                send_signal(parent, leader->exit_signal, info);
+                send_parent_signal(parent, leader->exit_signal, info);
         }
 
         if (exit_hook != NULL)
@@ -290,7 +324,7 @@ retry:
         struct task *parent;
         list_for_each_entry(&current->group->threads, parent, group_links) {
             struct task *task;
-            list_for_each_entry(&current->children, task, siblings) {
+            list_for_each_entry(&parent->children, task, siblings) {
                 if (!task_is_leader(task))
                     continue;
                 if (idtype == P_PGID_ && task->group->pgid != id)

@@ -99,6 +99,11 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
 
     struct tgroup *old_group = task->group;
     lock(&pids_lock);
+    if ((flags & (CLONE_THREAD_ | CLONE_PARENT_)) && current->parent != NULL) {
+        list_remove(&task->siblings);
+        task->parent = current->parent;
+        list_add(&task->parent->children, &task->siblings);
+    }
     lock(&old_group->lock);
     if (!(flags & CLONE_THREAD_)) {
         task->group = tgroup_copy(old_group);

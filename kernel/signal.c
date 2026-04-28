@@ -106,7 +106,7 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
 
     struct sighand *sighand = task->sighand;
     lock(&sighand->lock);
-    if (signal_action(sighand, sig) != SIGNAL_IGNORE) {
+    if (signal_action(sighand, sig) != SIGNAL_IGNORE || sigset_has(task->waiting, sig)) {
         deliver_signal_unlocked(task, sig, info);
     }
     unlock(&sighand->lock);
@@ -661,31 +661,34 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
     lock(&current->sighand->lock);
     assert(current->waiting == 0);
     current->waiting = set;
-    int err;
-    do {
+
+    struct sigqueue *sigqueue;
+    int err = 0;
+    while (true) {
+        list_for_each_entry(&current->queue, sigqueue, queue) {
+            if (sigset_has(set, sigqueue->info.sig)) {
+                list_remove(&sigqueue->queue);
+                sigset_del(&current->pending, sigqueue->info.sig);
+                goto found;
+            }
+        }
         err = wait_for(&current->pause, &current->sighand->lock, timeout_addr == 0 ? NULL : &timeout);
-    } while (err == 0);
+        if (err != 0)
+            break;
+    }
     current->waiting = 0;
+    unlock(&current->sighand->lock);
     if (err == _ETIMEDOUT) {
-        unlock(&current->sighand->lock);
         STRACE("sigtimedwait timed out\n");
         return _EAGAIN;
     }
+    return _EINTR;
 
-    struct sigqueue *sigqueue;
-    bool found = false;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(set, sigqueue->info.sig)) {
-            found = true;
-            list_remove(&sigqueue->queue);
-            break;
-        }
-    }
-    unlock(&current->sighand->lock);
-    if (!found)
-        return _EINTR;
+found:
+    current->waiting = 0;
     struct siginfo_ info = sigqueue->info;
     free(sigqueue);
+    unlock(&current->sighand->lock);
     if (info_addr != 0)
         if (user_put(info_addr, info))
             return _EFAULT;
