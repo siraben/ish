@@ -83,7 +83,15 @@ void mem_next_page(struct mem *mem, page_t *page) {
 page_t pt_find_hole(struct mem *mem, pages_t size) {
     page_t hole_end = 0; // this can never be used before initializing but gcc doesn't realize
     bool in_hole = false;
-    for (page_t page = 0xf7ffd; page > 0x40000; page--) {
+#if GUEST_RISCV64
+    // Keep automatic mappings below bit 31 while the RV64 port still uses a
+    // 32-bit-sized guest address space. Some libc allocator paths use word
+    // operations internally and must not see mmap pointers that sign-extend.
+    const page_t mmap_top = 0x7fffd;
+#else
+    const page_t mmap_top = 0xf7ffd;
+#endif
+    for (page_t page = mmap_top; page > 0x40000; page--) {
         // I don't know how this works but it does
         if (!in_hole && mem_pt(mem, page) == NULL) {
             in_hole = true;
