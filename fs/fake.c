@@ -66,12 +66,30 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
     if (IS_ERR(fd))
         return fd;
     bool may_create = flags & O_CREAT_;
+    bool exclusive_create = (flags & O_EXCL_) && may_create;
+    struct ish_stat ishstat;
+    if (exclusive_create) {
+        ishstat.mode = mode | S_IFREG;
+        ishstat.uid = current->fsuid;
+        ishstat.gid = current->fsgid;
+        ishstat.rdev = 0;
+        sqlite3_mutex_enter(fs->lock);
+        fd->fake_inode = path_defer_create(fs, path, &ishstat);
+        sqlite3_mutex_leave(fs->lock);
+        if (fd->fake_inode == 0) {
+            fd_close(fd);
+            return ERR_PTR(_ENOMEM);
+        }
+        fakefs_fd_cache_stat(fd, fs, &ishstat);
+        fd->ops = &fakefs_fdops;
+        return fd;
+    }
     if (may_create)
         db_begin_write(fs);
     else
         db_begin_read(fs);
-    struct ish_stat ishstat;
     fd->fake_inode = path_get_inode(fs, path);
+    bool created = false;
     if (may_create) {
         ishstat.mode = mode | S_IFREG;
         ishstat.uid = current->fsuid;
@@ -79,9 +97,10 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
         ishstat.rdev = 0;
         if (fd->fake_inode == 0) {
             fd->fake_inode = path_create(fs, path, &ishstat);
+            created = true;
         }
     }
-    if (fd->fake_inode != 0)
+    if (fd->fake_inode != 0 && !created)
         if (!path_read_stat(fs, path, &ishstat, NULL))
             fd->fake_inode = 0;
     db_commit(fs);
@@ -128,6 +147,9 @@ step:
 
 static int fakefs_link(struct mount *mount, const char *src, const char *dst) {
     struct fakefs_db *fs = &mount->fakefs;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
     db_begin_write(fs);
     int err = realfs.link(mount, src, dst);
     if (err < 0) {
@@ -141,6 +163,9 @@ static int fakefs_link(struct mount *mount, const char *src, const char *dst) {
 
 static int fakefs_unlink(struct mount *mount, const char *path) {
     struct fakefs_db *fs = &mount->fakefs;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
     db_begin_write(fs);
     int err = realfs.unlink(mount, path);
     if (err < 0) {
@@ -155,6 +180,9 @@ static int fakefs_unlink(struct mount *mount, const char *path) {
 
 static int fakefs_rmdir(struct mount *mount, const char *path) {
     struct fakefs_db *fs = &mount->fakefs;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
     db_begin_write(fs);
     int err = realfs.rmdir(mount, path);
     if (err < 0) {
@@ -169,6 +197,9 @@ static int fakefs_rmdir(struct mount *mount, const char *path) {
 
 static int fakefs_rename(struct mount *mount, const char *src, const char *dst) {
     struct fakefs_db *fs = &mount->fakefs;
+    sqlite3_mutex_enter(fs->lock);
+    db_flush_deferred(fs);
+    sqlite3_mutex_leave(fs->lock);
     db_begin_write(fs);
     path_rename(fs, src, dst);
     int err = realfs.rename(mount, src, dst);
@@ -182,11 +213,9 @@ static int fakefs_rename(struct mount *mount, const char *src, const char *dst) 
 
 static int fakefs_symlink(struct mount *mount, const char *target, const char *link) {
     struct fakefs_db *fs = &mount->fakefs;
-    db_begin_write(fs);
     // create a file containing the target
     int fd = openat(mount->root_fd, fix_path(link), O_WRONLY | O_CREAT | O_EXCL, 0666);
     if (fd < 0) {
-        db_rollback(fs);
         return errno_map();
     }
     ssize_t res = write(fd, target, strlen(target));
@@ -194,7 +223,6 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     if (res < 0) {
         int saved_errno = errno;
         unlinkat(mount->root_fd, fix_path(link), 0);
-        db_rollback(fs);
         errno = saved_errno;
         return errno_map();
     }
@@ -205,8 +233,13 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     ishstat.uid = current->fsuid;
     ishstat.gid = current->fsgid;
     ishstat.rdev = 0;
-    path_create(fs, link, &ishstat);
-    db_commit(fs);
+    sqlite3_mutex_enter(fs->lock);
+    inode_t inode = path_defer_create(fs, link, &ishstat);
+    sqlite3_mutex_leave(fs->lock);
+    if (inode == 0) {
+        unlinkat(mount->root_fd, fix_path(link), 0);
+        return _ENOMEM;
+    }
     return 0;
 }
 
@@ -322,34 +355,36 @@ static int fakefs_fsetattr(struct fd *fd, struct attr attr) {
     struct fakefs_db *fs = &fd->mount->fakefs;
     if (attr.type == attr_size)
         return realfs.fsetattr(fd, attr);
-    db_begin_write(fs);
+    sqlite3_mutex_enter(fs->lock);
     struct ish_stat ishstat;
     if (fd->fake_ishstat_valid && fd->fake_ishstat_generation == fs->cache_generation)
         ishstat = fd->fake_ishstat;
     else
         inode_read_stat_or_die(fs, fd->fake_inode, &ishstat);
     fake_stat_setattr(&ishstat, attr);
-    inode_write_stat(fs, fd->fake_inode, &ishstat);
-    db_commit(fs);
+    inode_defer_write_stat(fs, fd->fake_inode, &ishstat);
+    sqlite3_mutex_leave(fs->lock);
     fakefs_fd_cache_stat(fd, fs, &ishstat);
     return 0;
 }
 
 static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     struct fakefs_db *fs = &mount->fakefs;
-    db_begin_write(fs);
     int err = realfs.mkdir(mount, path, 0777);
-    if (err < 0) {
-        db_rollback(fs);
+    if (err < 0)
         return err;
-    }
     struct ish_stat ishstat;
     ishstat.mode = mode | S_IFDIR;
     ishstat.uid = current->fsuid;
     ishstat.gid = current->fsgid;
     ishstat.rdev = 0;
-    path_create(fs, path, &ishstat);
-    db_commit(fs);
+    sqlite3_mutex_enter(fs->lock);
+    inode_t inode = path_defer_create(fs, path, &ishstat);
+    sqlite3_mutex_leave(fs->lock);
+    if (inode == 0) {
+        realfs.rmdir(mount, path);
+        return _ENOMEM;
+    }
     return 0;
 }
 

@@ -39,9 +39,13 @@ The timed command is:
 Measured on this branch with `RESTORES_PER_RUN=5 RUNS=5 WARMUPS=1`:
 
 ```text
-baseline_x5             avg 3.683045s
-candidate_used_slot_x5  avg 3.635887s
+baseline_x5            avg 3.683045s
+path_stat_writeback_x5 avg 3.000889s
 ```
+
+The writeback result defers fakefs metadata inserts/updates for exclusive file
+creates, mkdirs, symlinks, and fd metadata changes, then flushes the accumulated
+`paths` and `stats` rows in bulk.
 
 Rejected experiments in this workload:
 
@@ -52,3 +56,5 @@ Rejected experiments in this workload:
 - Cached mount/source path lengths: did not move this benchmark.
 - fd-table first-free tracking: valid O(n) to amortized O(1) cleanup, but not a
   Nix-unpack win without a separate fd-churn benchmark.
+- Deferred fd-only stat writes without path create batching: did not improve the
+  restore benchmark because create metadata remained the dominant SQLite path.
