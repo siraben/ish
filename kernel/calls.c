@@ -220,6 +220,9 @@ RV_WRAP2(sys_setgroups, dword_t, addr_t)
 RV_WRAP1(sys_uname, addr_t)
 RV_WRAP2(sys_sethostname, addr_t, dword_t)
 RV_WRAP2(sys_getrusage, dword_t, addr_t)
+RV_WRAP5(sys_xattr_stub, addr_t, addr_t, addr_t, dword_t, dword_t)
+RV_WRAP2(sys_getrlimit64, dword_t, addr_t)
+RV_WRAP2(sys_setrlimit64, dword_t, addr_t)
 RV_WRAP0(sys_getpid)
 RV_WRAP0(sys_getppid)
 RV_WRAP0(sys_getuid)
@@ -278,7 +281,7 @@ syscall_t syscall_table[] = {
     // fanotify, BPF, keyrings, etc.) cannot be faithfully implemented in this
     // userspace kernel; supported syscalls override this initializer below.
     [0 ... 471] = rv_stub,
-    [5 ... 16] = rv_stub, // xattrs: backing fs metadata model is not complete.
+    [5 ... 16] = rv_sys_xattr_stub, // xattrs: backing fs metadata model is not complete.
     [17]  = rv_sys_getcwd,
     [19]  = rv_sys_eventfd2,
     [20]  = rv_sys_epoll_create,
@@ -423,6 +426,8 @@ syscall_t syscall_table[] = {
     [160] = rv_sys_uname,
     [161] = rv_sys_sethostname,
     [162] = rv_stub, // domainname is not exposed by the emulator.
+    [163] = rv_sys_getrlimit64,
+    [164] = rv_sys_setrlimit64,
     [166] = rv_sys_umask,
     [165] = rv_sys_getrusage,
     [167] = rv_sys_prctl,
