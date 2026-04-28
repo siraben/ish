@@ -16,6 +16,7 @@
 static const int DefaultColumns = 80;
 static const int DefaultRows = 24;
 static const size_t MaxScrollbackBytes = 10 * 1000 * 1000;
+static const CGFloat CellWidthAdjustment = -0.5;
 
 static void GhosttyWritePty(GhosttyTerminal terminal, void *userdata, const uint8_t *data, size_t len) {
     (void) terminal;
@@ -42,10 +43,33 @@ static UIColor *UIColorFromGhosttyColor(GhosttyColorRgb color) {
     return [UIColor colorWithRed:color.r / 255.0 green:color.g / 255.0 blue:color.b / 255.0 alpha:1];
 }
 
-static UIFont *DefaultTerminalFont(CGFloat size, UIFontWeight weight) {
-    if (@available(iOS 13.0, *))
-        return [UIFont monospacedSystemFontOfSize:size weight:weight];
-    return [UIFont fontWithName:@"Menlo" size:size] ?: [UIFont systemFontOfSize:size weight:weight];
+static UIFont *TerminalFontForFamily(NSString *fontFamily, CGFloat size, UIFontWeight weight) {
+    if (@available(iOS 13.4, *)) {
+        if ([fontFamily isEqualToString:@"ui-monospace"])
+            return [UIFont monospacedSystemFontOfSize:size weight:weight];
+    }
+
+    UIFont *font = [UIFont fontWithName:fontFamily size:size];
+    if (font == nil)
+        font = [UIFont fontWithName:@"Menlo" size:size];
+    if (font == nil) {
+        if (@available(iOS 13.0, *))
+            return [UIFont monospacedSystemFontOfSize:size weight:weight];
+        return [UIFont systemFontOfSize:size weight:weight];
+    }
+
+    if (weight <= UIFontWeightRegular)
+        return font;
+
+    UIFontDescriptorSymbolicTraits traits = font.fontDescriptor.symbolicTraits | UIFontDescriptorTraitBold;
+    UIFontDescriptor *boldDescriptor = [font.fontDescriptor fontDescriptorWithSymbolicTraits:traits];
+    return boldDescriptor ? [UIFont fontWithDescriptor:boldDescriptor size:size] : font;
+}
+
+static CGFloat PixelCeil(CGFloat value, CGFloat scale) {
+    if (scale <= 0)
+        scale = 1;
+    return ceil(value * scale) / scale;
 }
 
 @interface GhosttyTerminalDisplay ()
@@ -81,8 +105,8 @@ static UIFont *DefaultTerminalFont(CGFloat size, UIFontWeight weight) {
     if (self = [super initWithFrame:frame]) {
         self.opaque = YES;
         self.contentMode = UIViewContentModeRedraw;
-        self.regularFont = DefaultTerminalFont(14, UIFontWeightRegular);
-        self.boldFont = DefaultTerminalFont(14, UIFontWeightBold);
+        self.regularFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightRegular);
+        self.boldFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightBold);
         self.foregroundColor = (GhosttyColorRgb) {.r = 255, .g = 255, .b = 255};
         self.backgroundColor = (GhosttyColorRgb) {.r = 0, .g = 0, .b = 0};
         self.cursorColor = self.foregroundColor;
@@ -130,7 +154,11 @@ static UIFont *DefaultTerminalFont(CGFloat size, UIFontWeight weight) {
 - (void)updateCharacterSize {
     NSDictionary *attributes = @{NSFontAttributeName: self.regularFont};
     CGSize size = [@"W" sizeWithAttributes:attributes];
-    self.characterSize = CGSizeMake(ceil(size.width), ceil(self.regularFont.lineHeight));
+    CGFloat scale = self.window.screen.scale ?: UIScreen.mainScreen.scale;
+    CGFloat width = size.width + CellWidthAdjustment;
+    CGFloat height = self.regularFont.lineHeight;
+    self.characterSize = CGSizeMake(MAX(1, PixelCeil(width, scale)),
+                                    MAX(1, PixelCeil(height, scale)));
 }
 
 - (void)resizeTerminalToBounds {
@@ -147,8 +175,8 @@ static UIFont *DefaultTerminalFont(CGFloat size, UIFontWeight weight) {
     self.rows = rows;
     CGFloat scale = self.window.screen.scale ?: UIScreen.mainScreen.scale;
     ghostty_terminal_resize(_terminal, columns, rows,
-                            (uint32_t) ceil(self.characterSize.width * scale),
-                            (uint32_t) ceil(self.characterSize.height * scale));
+                            (uint32_t) lrint(self.characterSize.width * scale),
+                            (uint32_t) lrint(self.characterSize.height * scale));
     _needsRenderStateUpdate = YES;
     [self updateRenderStateIfNeeded];
     [self updateScrollbar];
@@ -199,11 +227,8 @@ static UIFont *DefaultTerminalFont(CGFloat size, UIFontWeight weight) {
    colorPaletteOverrides:(NSArray<NSString *> *)colorPaletteOverrides
              blinkCursor:(BOOL)blinkCursor
              cursorShape:(NSString *)cursorShape {
-    UIFont *font = [UIFont fontWithName:fontFamily size:fontSize];
-    if (font == nil)
-        font = DefaultTerminalFont(fontSize, UIFontWeightRegular);
-    self.regularFont = font;
-    self.boldFont = DefaultTerminalFont(fontSize, UIFontWeightBold);
+    self.regularFont = TerminalFontForFamily(fontFamily, fontSize, UIFontWeightRegular);
+    self.boldFont = TerminalFontForFamily(fontFamily, fontSize, UIFontWeightBold);
     self.foregroundColor = GhosttyColorFromHex(foregroundColor, self.foregroundColor);
     self.backgroundColor = GhosttyColorFromHex(backgroundColor, self.backgroundColor);
     if (cursorColor != nil) {
