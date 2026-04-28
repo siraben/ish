@@ -133,6 +133,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     if (self = [super initWithFrame:frame]) {
         self.opaque = YES;
         self.contentMode = UIViewContentModeRedraw;
+        self.layer.needsDisplayOnBoundsChange = YES;
         self.regularFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightRegular);
         self.boldFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightBold);
         self.foregroundColor = (GhosttyColorRgb) {.r = 255, .g = 255, .b = 255};
@@ -166,6 +167,15 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         _needsRenderStateUpdate = YES;
     }
     return self;
+}
+
+- (id<CAAction>)actionForLayer:(CALayer *)layer forKey:(NSString *)event {
+    if (layer == self.layer &&
+        ([event isEqualToString:@"bounds"] ||
+         [event isEqualToString:@"position"] ||
+         [event isEqualToString:@"contents"]))
+        return (id<CAAction>) NSNull.null;
+    return [super actionForLayer:layer forKey:event];
 }
 
 - (void)dealloc {

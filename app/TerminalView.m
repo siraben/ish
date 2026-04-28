@@ -138,6 +138,7 @@ struct rowcol {
     selectionTextView.autocorrectionType = UITextAutocorrectionTypeNo;
     selectionTextView.spellCheckingType = UITextSpellCheckingTypeNo;
     selectionTextView.hidden = YES;
+    selectionTextView.layer.needsDisplayOnBoundsChange = YES;
     [self addSubview:selectionTextView];
 
     self.selectionTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTerminal:)];
@@ -346,12 +347,15 @@ struct rowcol {
     if (!self.terminal.loaded)
         return;
     GhosttyTerminalDisplay *displayView = self.terminal.displayView;
-    self.selectionTextView.font = displayView.selectionFont;
-    self.selectionTextView.text = displayView.visibleText;
-    self.selectionTextView.frame = self.bounds;
-    CGSize textContainerSize = CGSizeMake(MAX(self.bounds.size.width, displayView.columns * displayView.characterSize.width),
-                                          MAX(self.bounds.size.height, displayView.rows * displayView.characterSize.height));
-    self.selectionTextView.textContainer.size = textContainerSize;
+    [UIView performWithoutAnimation:^{
+        self.selectionTextView.font = displayView.selectionFont;
+        self.selectionTextView.text = displayView.visibleText;
+        self.selectionTextView.frame = self.bounds;
+        CGSize textContainerSize = CGSizeMake(MAX(self.bounds.size.width, displayView.columns * displayView.characterSize.width),
+                                              MAX(self.bounds.size.height, displayView.rows * displayView.characterSize.height));
+        self.selectionTextView.textContainer.size = textContainerSize;
+        [self.selectionTextView layoutIfNeeded];
+    }];
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {
