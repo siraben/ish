@@ -1,5 +1,6 @@
 #include <sys/stat.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -66,6 +67,10 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         return _ENOTDIR;
 
     dword_t orig_count = count;
+    char *out = malloc(count);
+    if (out == NULL && count != 0)
+        return _ENOMEM;
+    dword_t used = 0;
 
     long ptr;
     int err;
@@ -74,8 +79,10 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         ptr = fd_telldir(fd);
         struct dir_entry entry;
         err = fd->ops->readdir(fd, &entry);
-        if (err < 0)
+        if (err < 0) {
+            free(out);
             return err;
+        }
         if (err == 0)
             break;
 
@@ -94,13 +101,17 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 
         if (reclen > count)
             break;
-        if (user_write(dirents, dirent_data, reclen))
-            return _EFAULT;
-        dirents += reclen;
+        memcpy(out + used, dirent_data, reclen);
+        used += reclen;
         count -= reclen;
     }
 
     fd_seekdir(fd, ptr);
+    if (used != 0 && user_write(dirents, out, used)) {
+        free(out);
+        return _EFAULT;
+    }
+    free(out);
     return orig_count - count;
 }
 
@@ -111,4 +122,3 @@ int_t sys_getdents(fd_t f, addr_t dirents, uint_t count) {
 int_t sys_getdents64(fd_t f, addr_t dirents, uint_t count) {
     return sys_getdents_common(f, dirents, count, fill_dirent_64);
 }
-

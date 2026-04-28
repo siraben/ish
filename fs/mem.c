@@ -66,6 +66,7 @@ struct dev_ops null_dev = {
     .fd.write = null_write,
     .fd.lseek = null_lseek,
     .fd.poll = ready_poll,
+    .fd.discard_write = true,
 };
 
 static ssize_t zero_read(struct fd *UNUSED(fd), void *buf, size_t bufsize) {
@@ -81,6 +82,8 @@ struct dev_ops zero_dev = {
     .fd.write = zero_write,
     .fd.lseek = null_lseek,
     .fd.poll = ready_poll,
+    .fd.discard_write = true,
+    .fd.zero_read = true,
 };
 
 static ssize_t full_write(struct fd *UNUSED(fd), const void *UNUSED(buf), size_t UNUSED(bufsize)) {
@@ -92,6 +95,8 @@ struct dev_ops full_dev = {
     .fd.write = full_write,
     .fd.lseek = null_lseek,
     .fd.poll = ready_poll,
+    .fd.discard_write = true,
+    .fd.zero_read = true,
 };
 
 static ssize_t random_read(struct fd *UNUSED(fd), void *buf, size_t bufsize) {
@@ -104,4 +109,5 @@ struct dev_ops random_dev = {
     .fd.write = null_write,
     .fd.lseek = null_lseek,
     .fd.poll = ready_poll,
+    .fd.discard_write = true,
 };

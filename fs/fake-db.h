@@ -5,6 +5,27 @@
 #include "fs/fix_path.h"
 #include "misc.h"
 
+struct ish_stat {
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t rdev;
+};
+
+typedef uint64_t inode_t;
+
+#ifndef FAKEFS_STAT_CACHE_SIZE
+#define FAKEFS_STAT_CACHE_SIZE 2048
+#endif
+
+struct fakefs_stat_cache_entry {
+    char *path;
+    inode_t inode;
+    struct ish_stat stat;
+    uint64_t generation;
+    bool has_stat;
+};
+
 struct fakefs_db {
     sqlite3 *db;
     struct {
@@ -25,6 +46,9 @@ struct fakefs_db {
         sqlite3_stmt *try_cleanup_inode;
     } stmt;
     sqlite3_mutex *lock;
+    uint64_t cache_generation;
+    bool in_write_transaction;
+    struct fakefs_stat_cache_entry stat_cache[FAKEFS_STAT_CACHE_SIZE];
 };
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd);
@@ -39,18 +63,11 @@ bool db_exec(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 
-struct ish_stat {
-    uint32_t mode;
-    uint32_t uid;
-    uint32_t gid;
-    uint32_t rdev;
-};
-
-typedef uint64_t inode_t;
-
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat);
+inode_t path_get_inode_cached(struct fakefs_db *fs, const char *path);
+bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
 
 bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
 void inode_read_stat_or_die(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);

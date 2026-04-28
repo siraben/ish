@@ -33,6 +33,21 @@ static int __user_write_task(struct task *task, addr_t addr, const void *buf, si
     return 0;
 }
 
+static int __user_memset_task(struct task *task, addr_t addr, int value, size_t count) {
+    addr_t p = addr;
+    while (p < addr + count) {
+        addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
+        if (chunk_end > addr + count)
+            chunk_end = addr + count;
+        char *ptr = mem_ptr(task->mem, p, MEM_WRITE);
+        if (ptr == NULL)
+            return 1;
+        memset(ptr, value, chunk_end - p);
+        p = chunk_end;
+    }
+    return 0;
+}
+
 int user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
     read_wrlock(&task->mem->lock);
     int res = __user_read_task(task, addr, buf, count);
@@ -60,6 +75,13 @@ int user_write_task_ptrace(struct task *task, addr_t addr, const void *buf, size
 
 int user_write(addr_t addr, const void *buf, size_t count) {
     return user_write_task(current, addr, buf, count);
+}
+
+int user_memset_bytes(addr_t addr, int value, size_t count) {
+    read_wrlock(&current->mem->lock);
+    int res = __user_memset_task(current, addr, value, count);
+    read_wrunlock(&current->mem->lock);
+    return res;
 }
 
 int user_read_string(addr_t addr, char *buf, size_t max) {

@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include "kernel/errno.h"
 #include "debug.h"
@@ -45,14 +46,27 @@ void db_begin_read(struct fakefs_db *fs) {
 }
 void db_begin_write(struct fakefs_db *fs) {
     sqlite3_mutex_enter(fs->lock);
+    fs->in_write_transaction = true;
     db_exec_reset(fs, fs->stmt.begin_immediate);
 }
 void db_commit(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.commit);
+    if (fs->in_write_transaction) {
+        fs->cache_generation++;
+        if (fs->cache_generation == 0)
+            fs->cache_generation = 1;
+        fs->in_write_transaction = false;
+    }
     sqlite3_mutex_leave(fs->lock);
 }
 void db_rollback(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.rollback);
+    if (fs->in_write_transaction) {
+        fs->cache_generation++;
+        if (fs->cache_generation == 0)
+            fs->cache_generation = 1;
+        fs->in_write_transaction = false;
+    }
     sqlite3_mutex_leave(fs->lock);
 }
 
@@ -60,28 +74,112 @@ static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {
     sqlite3_bind_blob(stmt, i, path, strlen(path), SQLITE_TRANSIENT);
 }
 
+static uint64_t path_hash(const char *path) {
+    uint64_t hash = 1469598103934665603ull;
+    while (*path != '\0') {
+        hash ^= (unsigned char) *path++;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static char *path_dup(const char *path) {
+    size_t len = strlen(path) + 1;
+    char *copy = malloc(len);
+    if (copy != NULL)
+        memcpy(copy, path, len);
+    return copy;
+}
+
+static struct fakefs_stat_cache_entry *stat_cache_entry(struct fakefs_db *fs, const char *path) {
+    return &fs->stat_cache[path_hash(path) % FAKEFS_STAT_CACHE_SIZE];
+}
+
+static bool stat_cache_lookup(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
+    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    if (entry->generation != fs->cache_generation || entry->path == NULL || strcmp(entry->path, path) != 0)
+        return false;
+    if (inode != NULL)
+        *inode = entry->inode;
+    if (stat != NULL) {
+        if (!entry->has_stat)
+            return false;
+        *stat = entry->stat;
+    }
+    return true;
+}
+
+static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t inode, const struct ish_stat *stat) {
+    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    if (entry->path == NULL || strcmp(entry->path, path) != 0) {
+        char *copy = path_dup(path);
+        if (copy == NULL)
+            return;
+        free(entry->path);
+        entry->path = copy;
+    }
+    entry->inode = inode;
+    if (stat != NULL) {
+        entry->stat = *stat;
+        entry->has_stat = true;
+    } else {
+        entry->has_stat = false;
+    }
+    entry->generation = fs->cache_generation;
+}
+
 inode_t path_get_inode(struct fakefs_db *fs, const char *path) {
+    inode_t cached_inode;
+    if (stat_cache_lookup(fs, path, NULL, &cached_inode))
+        return cached_inode;
+
     // select inode from paths where path = ?
     bind_path(fs->stmt.path_get_inode, 1, path);
     inode_t inode = 0;
     if (db_exec(fs, fs->stmt.path_get_inode))
         inode = sqlite3_column_int64(fs->stmt.path_get_inode, 0);
     db_reset(fs, fs->stmt.path_get_inode);
+    if (inode != 0)
+        stat_cache_store(fs, path, inode, NULL);
     return inode;
 }
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
-    // select inode, stat from stats natural join paths where path = ?
+    if (stat_cache_lookup(fs, path, stat, inode))
+        return true;
+
+    // select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?
     bind_path(fs->stmt.path_read_stat, 1, path);
     bool exists = db_exec(fs, fs->stmt.path_read_stat);
+    inode_t found_inode = 0;
+    struct ish_stat found_stat = {};
     if (exists) {
+        found_inode = sqlite3_column_int64(fs->stmt.path_read_stat, 0);
+        found_stat = *(struct ish_stat *) sqlite3_column_blob(fs->stmt.path_read_stat, 1);
         if (inode)
-            *inode = sqlite3_column_int64(fs->stmt.path_read_stat, 0);
+            *inode = found_inode;
         if (stat)
-            *stat = *(struct ish_stat *) sqlite3_column_blob(fs->stmt.path_read_stat, 1);
+            *stat = found_stat;
     }
     db_reset(fs, fs->stmt.path_read_stat);
+    if (exists)
+        stat_cache_store(fs, path, found_inode, &found_stat);
     return exists;
 }
+
+inode_t path_get_inode_cached(struct fakefs_db *fs, const char *path) {
+    sqlite3_mutex_enter(fs->lock);
+    inode_t inode = path_get_inode(fs, path);
+    sqlite3_mutex_leave(fs->lock);
+    return inode;
+}
+
+bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
+    sqlite3_mutex_enter(fs->lock);
+    bool exists = path_read_stat(fs, path, stat, inode);
+    sqlite3_mutex_leave(fs->lock);
+    return exists;
+}
+
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
     // insert into stats (stat) values (?)
     sqlite3_bind_blob(fs->stmt.path_create_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
@@ -90,6 +188,7 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     // insert or replace into paths values (?, last_insert_rowid())
     bind_path(fs->stmt.path_create_path, 1, path);
     db_exec_reset(fs, fs->stmt.path_create_path);
+    stat_cache_store(fs, path, inode, stat);
     return inode;
 }
 
@@ -111,6 +210,9 @@ void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat
     sqlite3_bind_blob(fs->stmt.inode_write_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
     sqlite3_bind_int64(fs->stmt.inode_write_stat, 2, inode);
     db_exec_reset(fs, fs->stmt.inode_write_stat);
+    fs->cache_generation++;
+    if (fs->cache_generation == 0)
+        fs->cache_generation = 1;
 }
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst) {
@@ -252,7 +354,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     fs->stmt.commit = db_prepare(fs, "commit");
     fs->stmt.rollback = db_prepare(fs, "rollback");
     fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
-    fs->stmt.path_read_stat = db_prepare(fs, "select inode, stat from stats natural join paths where path = ?");
+    fs->stmt.path_read_stat = db_prepare(fs, "select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?");
     fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (stat) values (?)");
     fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, last_insert_rowid())");
     fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");
@@ -268,6 +370,10 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
 
 int fake_db_deinit(struct fakefs_db *fs) {
     if (fs->db) {
+        for (unsigned i = 0; i < FAKEFS_STAT_CACHE_SIZE; i++) {
+            free(fs->stat_cache[i].path);
+            fs->stat_cache[i].path = NULL;
+        }
         sqlite3_finalize(fs->stmt.begin_deferred);
         sqlite3_finalize(fs->stmt.begin_immediate);
         sqlite3_finalize(fs->stmt.commit);

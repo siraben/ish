@@ -9,6 +9,7 @@
 #include <sys/xattr.h>
 #include <sys/file.h>
 #include <sys/statvfs.h>
+#include <sys/uio.h>
 #include <poll.h>
 
 #include "debug.h"
@@ -147,6 +148,20 @@ ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
 
 ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
     ssize_t res = write(fd->real_fd, buf, bufsize);
+    if (res < 0)
+        return errno_map();
+    return res;
+}
+
+ssize_t realfs_readv(struct fd *fd, const struct iovec *iov, int iovcnt) {
+    ssize_t res = readv(fd->real_fd, iov, iovcnt);
+    if (res < 0)
+        return errno_map();
+    return res;
+}
+
+ssize_t realfs_writev(struct fd *fd, const struct iovec *iov, int iovcnt) {
+    ssize_t res = writev(fd->real_fd, iov, iovcnt);
     if (res < 0)
         return errno_map();
     return res;
@@ -530,6 +545,8 @@ const struct fs_ops realfs = {
 const struct fd_ops realfs_fdops = {
     .read = realfs_read,
     .write = realfs_write,
+    .readv = realfs_readv,
+    .writev = realfs_writev,
     .pread = realfs_pread,
     .pwrite = realfs_pwrite,
     .readdir = realfs_readdir,

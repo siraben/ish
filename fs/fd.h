@@ -1,11 +1,13 @@
 #ifndef FD_H
 #define FD_H
 #include <dirent.h>
+#include <sys/uio.h>
 #include "kernel/memory.h"
 #include "util/list.h"
 #include "util/sync.h"
 #include "util/bits.h"
 #include "fs/stat.h"
+#include "fs/fake-db.h"
 #include "fs/proc.h"
 #include "fs/sockrestart.h"
 
@@ -100,6 +102,10 @@ struct fd {
     DIR *dir;
     struct inode_data *inode;
     ino_t fake_inode;
+    struct ish_stat fake_ishstat;
+    uint64_t fake_ishstat_generation;
+    bool fake_ishstat_valid;
+    char *fake_dir_path;
     struct statbuf stat; // for adhoc fs
     struct fd_sockrestart sockrestart; // argh
 
@@ -133,6 +139,8 @@ struct fd_ops {
     // TODO make optional for non-files
     ssize_t (*read)(struct fd *fd, void *buf, size_t bufsize);
     ssize_t (*write)(struct fd *fd, const void *buf, size_t bufsize);
+    ssize_t (*readv)(struct fd *fd, const struct iovec *iov, int iovcnt);
+    ssize_t (*writev)(struct fd *fd, const struct iovec *iov, int iovcnt);
     ssize_t (*pread)(struct fd *fd, void *buf, size_t bufsize, off_t off);
     ssize_t (*pwrite)(struct fd *fd, const void *buf, size_t bufsize, off_t off);
     off_t_ (*lseek)(struct fd *fd, off_t_ off, int whence);
@@ -166,6 +174,11 @@ struct fd_ops {
     int (*getflags)(struct fd *fd);
     // handle F_SETFL, i.e. set O_NONBLOCK
     int (*setflags)(struct fd *fd, dword_t arg);
+
+    // Writes to this fd do not inspect the user buffer.
+    bool discard_write;
+    // Reads from this fd always fill the user buffer with zeroes.
+    bool zero_read;
 };
 
 struct fdtable {

@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <errno.h>
 #include <limits.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -1076,9 +1077,10 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         msg_iov_fake = malloc(iov_size);
         if (msg_iov_fake == NULL)
             return _ENOMEM;
-        err = _EFAULT;
-        if (user_read(msg_fake.msg_iov, msg_iov_fake, iov_size))
+        if (user_read(msg_fake.msg_iov, msg_iov_fake, iov_size)) {
+            err = _EFAULT;
             goto out_free_iov;
+        }
 
         msg_iov = calloc((size_t) msg_fake.msg_iovlen, sizeof(*msg_iov));
         if (msg_iov == NULL) {
@@ -1117,9 +1119,10 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         size_t chunk_size = msg_iov[i].iov_len;
         if (chunk_size > n)
             chunk_size = n;
-        if (chunk_size > 0)
+        if (chunk_size > 0) {
             if (user_write(msg_iov_fake[i].base, msg_iov[i].iov_base, chunk_size))
                 err = _EFAULT;
+        }
         n -= chunk_size;
         if (err < 0)
             goto out_free_iov;
