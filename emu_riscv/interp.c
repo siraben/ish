@@ -4,6 +4,7 @@
 
 #include "emu_riscv/cpu.h"
 #include "emu_riscv/decode.h"
+#include "emu_riscv/atomic.h"
 #include "emu/interrupt.h"
 #include "emu/tlb.h"
 
@@ -188,23 +189,30 @@ static bool exec_amo(struct cpu_state *cpu, struct tlb *tlb, struct rv_insn *ins
     if (PGOFFSET(addr) > PAGE_SIZE - width)
         return false;
 
+    rv_atomic_lock();
+
     uint64_t loaded = 0;
-    if (!read_guest(cpu, tlb, addr, &loaded, width))
+    if (!rv_atomic_load(cpu, tlb, addr, &loaded, width, true)) {
+        rv_atomic_unlock();
         return false;
+    }
     if (width == 4)
         loaded = sign_extend_width((uint32_t) loaded, 32);
 
     if (funct5 == 0x02) {
         cpu->reservation_addr = addr;
+        rv_reservation_set(cpu, addr, loaded);
         cpu->reservation_valid = true;
         store_reg(cpu, insn->rd, loaded);
+        rv_atomic_unlock();
         return true;
     }
 
     uint64_t result = load_reg(cpu, insn->rs2);
     bool should_store = true;
     if (funct5 == 0x03) {
-        should_store = cpu->reservation_valid && cpu->reservation_addr == addr;
+        should_store = cpu->reservation_valid && cpu->reservation_addr == addr &&
+            rv_reservation_matches(cpu, addr, loaded);
         result = load_reg(cpu, insn->rs2);
         cpu->reservation_valid = false;
         store_reg(cpu, insn->rd, should_store ? 0 : 1);
@@ -220,19 +228,20 @@ static bool exec_amo(struct cpu_state *cpu, struct tlb *tlb, struct rv_insn *ins
         case 0x14: result = (int64_t) loaded > (int64_t) load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
         case 0x18: result = loaded < load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
         case 0x1c: result = loaded > load_reg(cpu, insn->rs2) ? loaded : load_reg(cpu, insn->rs2); break;
-        default: return false;
+        default:
+            rv_atomic_unlock();
+            return false;
         }
     }
 
     if (should_store) {
-        if (width == 4) {
-            uint32_t value = result;
-            if (!write_guest(cpu, tlb, addr, &value, width))
-                return false;
-        } else if (!write_guest(cpu, tlb, addr, &result, width)) {
+        cpu->reservation_valid = false;
+        if (!rv_atomic_store(cpu, tlb, addr, result, width)) {
+            rv_atomic_unlock();
             return false;
         }
     }
+    rv_atomic_unlock();
     return true;
 }
 

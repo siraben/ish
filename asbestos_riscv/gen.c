@@ -6,6 +6,7 @@
 
 #include "asbestos_riscv/gen.h"
 #include "debug.h"
+#include "emu_riscv/atomic.h"
 #include "emu_riscv/decode.h"
 #include "emu_riscv/cpu.h"
 #include "emu/interrupt.h"
@@ -67,10 +68,11 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
     if (PGOFFSET(addr) > PAGE_SIZE - width)
         return INT_UNDEFINED;
 
+    rv_atomic_lock();
+
     uint64_t loaded = 0;
-    if (!tlb_read(tlb, addr, &loaded, width)) {
-        cpu->segfault_addr = tlb->segfault_addr;
-        cpu->segfault_was_write = true;
+    if (!rv_atomic_load(cpu, tlb, addr, &loaded, width, true)) {
+        rv_atomic_unlock();
         return INT_GPF;
     }
     if (width == 4)
@@ -78,9 +80,11 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
 
     if (funct5 == 0x02) {
         cpu->reservation_addr = addr;
+        rv_reservation_set(cpu, addr, loaded);
         cpu->reservation_valid = true;
         if (rd != 0)
             cpu->x[rd] = loaded;
+        rv_atomic_unlock();
         return INT_NONE;
     }
 
@@ -88,7 +92,8 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
     uint64_t result = rs2_value;
     bool should_store = true;
     if (funct5 == 0x03) {
-        should_store = cpu->reservation_valid && cpu->reservation_addr == addr;
+        should_store = cpu->reservation_valid && cpu->reservation_addr == addr &&
+            rv_reservation_matches(cpu, addr, loaded);
         cpu->reservation_valid = false;
         if (rd != 0)
             cpu->x[rd] = should_store ? 0 : 1;
@@ -105,25 +110,20 @@ int rv_gadget_amo(struct cpu_state *cpu, struct tlb *tlb, unsigned funct5,
         case 0x14: result = (int64_t) loaded > (int64_t) rs2_value ? loaded : rs2_value; break;
         case 0x18: result = loaded < rs2_value ? loaded : rs2_value; break;
         case 0x1c: result = loaded > rs2_value ? loaded : rs2_value; break;
-        default: return INT_UNDEFINED;
+        default:
+            rv_atomic_unlock();
+            return INT_UNDEFINED;
         }
     }
 
     if (should_store) {
         cpu->reservation_valid = false;
-        bool ok;
-        if (width == 4) {
-            uint32_t narrow = result;
-            ok = tlb_write(tlb, addr, &narrow, width);
-        } else {
-            ok = tlb_write(tlb, addr, &result, width);
-        }
-        if (!ok) {
-            cpu->segfault_addr = tlb->segfault_addr;
-            cpu->segfault_was_write = true;
+        if (!rv_atomic_store(cpu, tlb, addr, result, width)) {
+            rv_atomic_unlock();
             return INT_GPF;
         }
     }
+    rv_atomic_unlock();
     return INT_NONE;
 }
 

@@ -40,6 +40,7 @@ dependencies = [librt, libm, libdl, threads, sqlite3]
 
 emu_src = [
     'emu/tlb.c',
+    'emu_riscv/atomic.c',
     'emu_riscv/stub.c',
     'emu_riscv/interp.c',
     'asbestos_riscv/asbestos.c',
