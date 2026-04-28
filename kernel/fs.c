@@ -246,10 +246,7 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
 
 static _Thread_local char syscall_io_buffer[SYSCALL_IO_BUFFER_SIZE];
 
-static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
-    if (fd == NULL)
-        return _EBADF;
+static ssize_t sys_read_fd(struct fd *fd, void *buf, size_t size) {
     if (S_ISDIR(fd->type))
         return _EISDIR;
 
@@ -273,6 +270,13 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
     return res;
 }
 
+static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    return sys_read_fd(fd, buf, size);
+}
+
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     STRACE("read(%d, 0x%x, %d)", fd_no, buf_addr, size);
     struct fd *fd = f_get(fd_no);
@@ -288,7 +292,7 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
         buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
-    int_t res = sys_read_buf(fd_no, buf, size);
+    int_t res = sys_read_fd(fd, buf, size);
     if (res >= 0) {
         if (user_write(buf_addr, buf, res))
             res = _EFAULT;
@@ -298,11 +302,7 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     return res;
 }
 
-static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
-    if (fd == NULL)
-        return _EBADF;
-
+static ssize_t sys_write_fd(struct fd *fd, void *buf, size_t size) {
     ssize_t res;
     if (fd->ops->write) {
         res = fd->ops->write(fd, buf, size);
@@ -317,12 +317,19 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
     return res;
 }
 
+static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    return sys_write_fd(fd, buf, size);
+}
+
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return _EBADF;
     if (fd->ops->discard_write)
-        return sys_write_buf(fd_no, NULL, size);
+        return sys_write_fd(fd, NULL, size);
 
     char *buf = syscall_io_buffer;
     if (size > SYSCALL_IO_BUFFER_SIZE)
@@ -337,7 +344,7 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     if (print_size > 100) print_size = 100;
     STRACE("write(%d, \"%.*s\", %d)", fd_no, print_size, buf, size);
 
-    res = sys_write_buf(fd_no, buf, size);
+    res = sys_write_fd(fd, buf, size);
 out:
     if (buf != syscall_io_buffer)
         free(buf);
@@ -492,7 +499,9 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
-    char *buf = malloc(size+1);
+    char *buf = syscall_io_buffer;
+    if (size > SYSCALL_IO_BUFFER_SIZE)
+        buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
     lock(&fd->lock);
@@ -513,14 +522,16 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
         assert(lseek_res >= 0);
     }
     if (res >= 0) {
-        buf[res] = '\0';
-        STRACE(" \"%.99s\"", buf);
+        size_t print_size = res;
+        if (print_size > 100) print_size = 100;
+        STRACE(" \"%.*s\"", print_size, buf);
         if (user_write(buf_addr, buf, res))
             res = _EFAULT;
     }
 out:
     unlock(&fd->lock);
-    free(buf);
+    if (buf != syscall_io_buffer)
+        free(buf);
     return res;
 }
 
@@ -529,11 +540,16 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
-    char *buf = malloc(size+1);
+    char *buf = syscall_io_buffer;
+    if (size > SYSCALL_IO_BUFFER_SIZE)
+        buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
-    if (user_read(buf_addr, buf, size))
+    if (user_read(buf_addr, buf, size)) {
+        if (buf != syscall_io_buffer)
+            free(buf);
         return _EFAULT;
+    }
     lock(&fd->lock);
     ssize_t res;
     if (fd->ops->pwrite) {
@@ -551,7 +567,8 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
         }
     }
     unlock(&fd->lock);
-    free(buf);
+    if (buf != syscall_io_buffer)
+        free(buf);
     return res;
 }
 
