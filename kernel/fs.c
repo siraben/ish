@@ -95,11 +95,24 @@ fd_t sys_openat2(fd_t at_f, addr_t path_addr, addr_t how_addr, dword_t size) {
         return _EINVAL;
     if (user_read(how_addr, &how, sizeof(how)))
         return _EFAULT;
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    STRACE("openat2(%d, \"%s\", flags=0x%llx, mode=0x%llx, resolve=0x%llx, size=%u)",
+            at_f, path, how.flags, how.mode, how.resolve, size);
     if ((how.flags >> 32) != 0 || (how.mode >> 32) != 0)
         return _EINVAL;
-    if (how.resolve != 0)
-        return _EINVAL;
-    return sys_openat(at_f, path_addr, how.flags, how.mode);
+    mode_t_ mode = how.mode;
+    dword_t flags = how.flags;
+    if (flags & O_CREAT_)
+        apply_umask(&mode);
+    struct fd *at = at_fd(at_f);
+    if (at == NULL)
+        return _EBADF;
+    struct fd *fd = generic_openat_resolve(at, path, flags, mode, how.resolve);
+    if (IS_ERR(fd))
+        return PTR_ERR(fd);
+    return f_install(fd, flags);
 }
 
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode) {

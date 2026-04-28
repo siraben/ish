@@ -49,6 +49,7 @@ struct attr {
 
 struct fd *generic_open(const char *path, int flags, int mode);
 struct fd *generic_openat(struct fd *at, const char *path, int flags, int mode);
+struct fd *generic_openat_resolve(struct fd *at, const char *path, int flags, int mode, qword_t resolve);
 int generic_getpath(struct fd *fd, char *buf);
 int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw);
 int generic_unlinkat(struct fd *at, const char *path);
@@ -112,6 +113,7 @@ bool mount_param_flag(const char *info, const char *flag);
 #define O_APPEND_ (1 << 10)
 #define O_NONBLOCK_ (1 << 11)
 #define O_DIRECTORY_ (1 << 16)
+#define O_NOFOLLOW_ (1 << 17)
 #define O_CLOEXEC_ (1 << 19)
 
 // generic ioctls

@@ -43,6 +43,15 @@ static int open_flags_real_from_fake(int flags) {
     if (flags & O_TRUNC_) real_flags |= O_TRUNC;
     if (flags & O_APPEND_) real_flags |= O_APPEND;
     if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
+#ifdef O_DIRECTORY
+    if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
+#ifdef O_NOFOLLOW
+    if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
+#endif
+#ifdef O_CLOEXEC
+    if (flags & O_CLOEXEC_) real_flags |= O_CLOEXEC;
+#endif
     return real_flags;
 }
 
@@ -56,6 +65,15 @@ static int open_flags_fake_from_real(int flags) {
     if (flags & O_TRUNC) fake_flags |= O_TRUNC_;
     if (flags & O_APPEND) fake_flags |= O_APPEND_;
     if (flags & O_NONBLOCK) fake_flags |= O_NONBLOCK_;
+#ifdef O_DIRECTORY
+    if (flags & O_DIRECTORY) fake_flags |= O_DIRECTORY_;
+#endif
+#ifdef O_NOFOLLOW
+    if (flags & O_NOFOLLOW) fake_flags |= O_NOFOLLOW_;
+#endif
+#ifdef O_CLOEXEC
+    if (flags & O_CLOEXEC) fake_flags |= O_CLOEXEC_;
+#endif
     return fake_flags;
 }
 
