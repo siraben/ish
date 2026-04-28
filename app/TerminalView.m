@@ -467,7 +467,7 @@ struct rowcol {
     if (action == @selector(copy:))
         return self.terminal.displayView.hasSelection;
     if (action == @selector(paste:))
-        return UIPasteboard.generalPasteboard.string != nil;
+        return UIPasteboard.generalPasteboard.hasStrings;
     return [super canPerformAction:action withSender:sender];
 }
 
