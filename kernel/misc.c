@@ -86,6 +86,13 @@ int_t sys_arch_prctl(int_t code, addr_t addr) {
     return _EINVAL;
 }
 
+int_t sys_unshare(dword_t flags) {
+    STRACE("unshare(%#x)", flags);
+    if (flags == 0)
+        return 0;
+    return _EPERM;
+}
+
 #define REBOOT_MAGIC1 0xfee1dead
 #define REBOOT_MAGIC2 672274793
 #define REBOOT_MAGIC2A 85072278

@@ -682,6 +682,11 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     // IP_MTU_DISCOVER has no equivalent on Darwin
     if (level == IPPROTO_IP && option == IP_MTU_DISCOVER_)
         return 0;
+    // Linux error-queue delivery has no Darwin equivalent. DNS resolvers such
+    // as musl enable it opportunistically and work without the ancillary data.
+    if ((level == IPPROTO_IP && option == IP_RECVERR_) ||
+            (level == IPPROTO_IPV6 && option == IPV6_RECVERR_))
+        return 0;
     // TCP_CONGESTION also has no equivalent on Darwin
 #if defined(__APPLE__)
     if (level == IPPROTO_TCP && option == TCP_CONGESTION_) {

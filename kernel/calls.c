@@ -403,6 +403,7 @@ RV_WRAP4(sys_wait4, pid_t_, addr_t, dword_t, addr_t)
 RV_WRAP4(sys_prlimit64, pid_t_, dword_t, addr_t, addr_t)
 RV_WRAP5(sys_renameat2, fd_t, addr_t, fd_t, addr_t, int_t)
 RV_WRAP3(sys_seccomp, dword_t, dword_t, addr_t)
+RV_WRAP1(sys_unshare, dword_t)
 RV_WRAP3(sys_getrandom, addr_t, dword_t, dword_t)
 RV_WRAP6(sys_copy_file_range, fd_t, addr_t, fd_t, addr_t, dword_t, uint_t)
 RV_WRAP5(sys_statx, fd_t, addr_t, int_t, uint_t, addr_t)
@@ -497,7 +498,7 @@ syscall_t syscall_table[] = {
     [94]  = rv_sys_exit_group,
     [95]  = rv_sys_waitid,
     [96]  = rv_sys_set_tid_address,
-    [97]  = rv_stub, // namespaces are not modeled.
+    [97]  = rv_sys_unshare,
     [98]  = rv_sys_futex,
     [99]  = rv_sys_set_robust_list,
     [100] = rv_sys_get_robust_list,
