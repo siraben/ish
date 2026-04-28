@@ -281,7 +281,7 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
         return _ESRCH;
     lock(&task->files->lock);
     struct fd *fd = fdtable_get(task->files, entry->fd);
-    int err = generic_getpath(fd, buf);
+    int err = fd != NULL ? generic_getpath(fd, buf) : _ENOENT;
     unlock(&task->files->lock);
     proc_put_task(task);
     return err;

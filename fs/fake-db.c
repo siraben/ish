@@ -321,6 +321,8 @@ extern int fakefs_rebuild(struct fakefs_db *fs, int root_fd);
 extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
+    memset(fs, 0, sizeof(*fs));
+
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
         printk("error opening database: %s\n", sqlite3_errmsg(fs->db));

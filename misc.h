@@ -9,6 +9,7 @@
 #include <stdnoreturn.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #endif
 
 // utility macros
@@ -91,9 +92,9 @@ static inline void __use(int dummy __attribute__((unused)), ...) {}
     })
 #elif defined(__arm64__) || defined(__aarch64__)
 #define rdtsc() ({ \
-        uint64_t tsc; \
-        __asm__ volatile("mrs %0, PMCCNTR_EL0" : "=r" (tsc)); \
-        tsc; \
+        struct timespec now; \
+        clock_gettime(CLOCK_MONOTONIC, &now); \
+        (uint64_t) now.tv_sec * 1000000000ull + (uint64_t) now.tv_nsec; \
     })
 #endif
 
