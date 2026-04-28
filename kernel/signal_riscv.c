@@ -136,6 +136,7 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
 
     if (task != current) {
         cpu_poke(&task->cpu);
+        pthread_kill(task->thread, SIGUSR1);
 
         unlock(&sighand->lock);
 retry:
@@ -172,6 +173,13 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
     unlock(&task->sighand->lock);
     if (action != 0 || waiting)
         deliver_signal(task, sig, info);
+
+    if (sig == SIGCONT_ || sig == SIGKILL_) {
+        lock(&task->group->lock);
+        task->group->stopped = false;
+        notify(&task->group->stopped_cond);
+        unlock(&task->group->lock);
+    }
 }
 
 static void save_regs(struct rv_user_regs *regs) {
@@ -280,13 +288,25 @@ bool try_self_signal(int sig) {
 }
 
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
-    (void) pgid;
-    (void) sig;
-    (void) info;
+    lock(&pids_lock);
+    struct pid *pid = pid_get(pgid);
+    if (pid == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    struct tgroup *tgroup;
+    list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
+        send_signal(tgroup->leader, sig, info);
+    }
+    unlock(&pids_lock);
     return 0;
 }
 
 void receive_signals(void) {
+    lock(&current->group->lock);
+    bool was_stopped = current->group->stopped;
+    unlock(&current->group->lock);
+
     if (current->has_saved_mask) {
         current->blocked = current->saved_mask;
         current->has_saved_mask = false;
@@ -314,9 +334,27 @@ void receive_signals(void) {
                 do_exit(128 + SIGSEGV_);
             return;
         }
+        if (action == 3) {
+            lock(&current->group->lock);
+            current->group->stopped = true;
+            current->group->group_exit_code = sig << 8 | 0x7f;
+            unlock(&current->group->lock);
+        }
         free(sigqueue);
     }
     unlock(&current->sighand->lock);
+
+    if (!was_stopped) {
+        lock(&current->group->lock);
+        bool now_stopped = current->group->stopped;
+        unlock(&current->group->lock);
+        if (now_stopped) {
+            lock(&pids_lock);
+            notify(&current->parent->group->child_exit);
+            send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
+            unlock(&pids_lock);
+        }
+    }
 }
 
 void sigmask_set_temp(sigset_t_ mask) {

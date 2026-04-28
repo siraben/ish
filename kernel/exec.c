@@ -629,10 +629,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (stat.mode & S_ISUID) {
         current->suid = current->euid;
         current->euid = stat.uid;
+        current->fsuid = current->euid;
     }
     if (stat.mode & S_ISGID) {
         current->sgid = current->egid;
         current->egid = stat.gid;
+        current->fsgid = current->egid;
     }
 
     // save current->comm

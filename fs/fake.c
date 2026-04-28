@@ -63,8 +63,8 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
     if (flags & O_CREAT_) {
         struct ish_stat ishstat;
         ishstat.mode = mode | S_IFREG;
-        ishstat.uid = current->euid;
-        ishstat.gid = current->egid;
+        ishstat.uid = current->fsuid;
+        ishstat.gid = current->fsgid;
         ishstat.rdev = 0;
         if (fd->fake_inode == 0) {
             path_create(fs, path, &ishstat);
@@ -183,8 +183,8 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     // customize the stat info so it looks like a link
     struct ish_stat ishstat;
     ishstat.mode = S_IFLNK | 0777; // symlinks always have full permissions
-    ishstat.uid = current->euid;
-    ishstat.gid = current->egid;
+    ishstat.uid = current->fsuid;
+    ishstat.gid = current->fsgid;
     ishstat.rdev = 0;
     path_create(fs, link, &ishstat);
     db_commit(fs);
@@ -206,8 +206,8 @@ static int fakefs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev
     }
     struct ish_stat stat;
     stat.mode = mode;
-    stat.uid = current->euid;
-    stat.gid = current->egid;
+    stat.uid = current->fsuid;
+    stat.gid = current->fsgid;
     stat.rdev = 0;
     if (S_ISBLK(mode) || S_ISCHR(mode))
         stat.rdev = dev;
@@ -321,8 +321,8 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     }
     struct ish_stat ishstat;
     ishstat.mode = mode | S_IFDIR;
-    ishstat.uid = current->euid;
-    ishstat.gid = current->egid;
+    ishstat.uid = current->fsuid;
+    ishstat.gid = current->fsgid;
     ishstat.rdev = 0;
     path_create(fs, path, &ishstat);
     db_commit(fs);

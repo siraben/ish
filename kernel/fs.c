@@ -27,9 +27,9 @@ int access_check(struct statbuf *stat, int check) {
     if (superuser()) return 0;
     if (check == 0) return 0;
     // Align check with the correct bits in mode
-    if (current->euid == stat->uid) {
+    if (current->fsuid == stat->uid) {
         check <<= 6;
-    } else if (current->egid == stat->gid) {
+    } else if (current->fsgid == stat->gid) {
         check <<= 3;
     }
     if (!(stat->mode & check))
@@ -55,13 +55,13 @@ dword_t sys_faccessat(fd_t at_f, addr_t path_addr, mode_t_ mode, dword_t flags) 
     if (flags & AT_EACCESS_)
         return generic_accessat(at, path, mode);
 
-    uid_t_ uid_tmp = current->euid;
-    uid_t_ gid_tmp = current->egid;
-    current->euid = current->uid;
-    current->egid = current->gid;
+    uid_t_ uid_tmp = current->fsuid;
+    uid_t_ gid_tmp = current->fsgid;
+    current->fsuid = current->uid;
+    current->fsgid = current->gid;
     int err = generic_accessat(at, path, mode);
-    current->euid = uid_tmp;
-    current->egid = gid_tmp;
+    current->fsuid = uid_tmp;
+    current->fsgid = gid_tmp;
     return err;
 }
 
@@ -517,6 +517,62 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     unlock(&fd->lock);
     free(buf);
     return res;
+}
+
+dword_t sys_preadv(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    STRACE("preadv(%d, %#x, %d, %lld)", f, iovec_addr, iovec_count, (long long) off);
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+
+    ssize_t total = 0;
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > UINT32_MAX || off < 0) {
+            total = _EINVAL;
+            break;
+        }
+        dword_t res = sys_pread(f, iovec[i].base, (dword_t) iovec[i].len, off);
+        if ((int_t) res < 0) {
+            if (total == 0)
+                total = (int_t) res;
+            break;
+        }
+        total += res;
+        off += res;
+        if (res < iovec[i].len)
+            break;
+    }
+
+    free(iovec);
+    return total;
+}
+
+dword_t sys_pwritev(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    STRACE("pwritev(%d, %#x, %d, %lld)", f, iovec_addr, iovec_count, (long long) off);
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+
+    ssize_t total = 0;
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (iovec[i].len > UINT32_MAX || off < 0) {
+            total = _EINVAL;
+            break;
+        }
+        dword_t res = sys_pwrite(f, iovec[i].base, (dword_t) iovec[i].len, off);
+        if ((int_t) res < 0) {
+            if (total == 0)
+                total = (int_t) res;
+            break;
+        }
+        total += res;
+        off += res;
+        if (res < iovec[i].len)
+            break;
+    }
+
+    free(iovec);
+    return total;
 }
 
 static int fd_ioctl(struct fd *fd, dword_t cmd, dword_t arg) {

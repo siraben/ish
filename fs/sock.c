@@ -1,10 +1,12 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <sys/un.h>
 #include "kernel/calls.h"
 #include "fs/fd.h"
@@ -1224,6 +1226,65 @@ int_t sys_sendmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags) {
         }
     }
     return num_sent;
+}
+
+int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t timeout_addr) {
+    struct fd *sock = sock_getfd(sock_fd);
+    if (sock == NULL)
+        return _EBADF;
+
+    bool has_timeout = timeout_addr != 0;
+    struct timespec deadline = {};
+    if (has_timeout) {
+        struct timespec_ timeout;
+        if (user_get(timeout_addr, timeout))
+            return _EFAULT;
+        if (timeout.sec < 0 || timeout.nsec < 0 || timeout.nsec >= 1000000000)
+            return _EINVAL;
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += timeout.sec;
+        deadline.tv_nsec += timeout.nsec;
+        if (deadline.tv_nsec >= 1000000000) {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1000000000;
+        }
+    }
+
+    int num_received = 0;
+    for (unsigned i = 0; i < vec_len; i++) {
+        if (has_timeout) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int timeout_ms = (deadline.tv_sec - now.tv_sec) * 1000 +
+                (deadline.tv_nsec - now.tv_nsec + 999999) / 1000000;
+            if (timeout_ms < 0)
+                timeout_ms = 0;
+            struct pollfd pfd = {.fd = sock->real_fd, .events = POLLIN};
+            int ready = poll(&pfd, 1, timeout_ms);
+            if (ready < 0)
+                return num_received > 0 ? num_received : errno_map();
+            if (ready == 0)
+                return num_received;
+        }
+
+        addr_t msghdr = msg_vec + i * sizeof(struct mmsghdr_);
+        int_t call_flags = flags & ~MSG_WAITFORONE_;
+        if (has_timeout || (num_received > 0 && (flags & MSG_WAITFORONE_)))
+            call_flags |= MSG_DONTWAIT_;
+        int_t res = sys_recvmsg(sock_fd, msghdr, call_flags);
+        if (res >= 0) {
+            addr_t msg_len_addr = msghdr + offsetof(struct mmsghdr_, len);
+            if (user_put(msg_len_addr, res))
+                res = _EFAULT;
+        }
+        if (res < 0) {
+            if (num_received > 0)
+                break;
+            return res;
+        }
+        num_received++;
+    }
+    return num_received;
 }
 
 static void sock_translate_err(struct fd *fd, int *err) {

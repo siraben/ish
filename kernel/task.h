@@ -30,6 +30,7 @@ struct task {
     pid_t_ pid, tgid; // immutable
     uid_t_ uid, gid;
     uid_t_ euid, egid;
+    uid_t_ fsuid, fsgid;
     uid_t_ suid, sgid;
 #define MAX_GROUPS 32
     unsigned ngroups;

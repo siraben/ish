@@ -34,8 +34,8 @@ static struct tmp_inode *tmp_inode_new(mode_t_ mode) {
     node->stat.inode = next_inode++;
 
     node->stat.mode = mode;
-    node->stat.uid = current->euid;
-    node->stat.gid = current->egid;
+    node->stat.uid = current->fsuid;
+    node->stat.gid = current->fsgid;
     if (S_ISREG(mode)) {
         node->file_data = malloc(0);
         if (node->file_data == NULL) {

@@ -81,6 +81,8 @@ dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, 
 dword_t sys_lseek(fd_t f, dword_t off, dword_t whence);
 dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t buf_size, off_t_ off);
 dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off);
+dword_t sys_preadv(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off);
+dword_t sys_pwritev(fd_t f, addr_t iovec_addr, dword_t iovec_count, off_t_ off);
 dword_t sys_ioctl(fd_t f, dword_t cmd, dword_t arg);
 dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg);
 dword_t sys_fcntl32(fd_t fd, dword_t cmd, dword_t arg);
@@ -189,9 +191,11 @@ dword_t sys_setpgrp(void);
 uid_t_ sys_getuid32(void);
 uid_t_ sys_getuid(void);
 int_t sys_setuid(uid_t uid);
+int_t sys_setfsuid(uid_t uid);
 uid_t_ sys_geteuid32(void);
 uid_t_ sys_geteuid(void);
 int_t sys_setgid(uid_t gid);
+int_t sys_setfsgid(uid_t gid);
 uid_t_ sys_getgid32(void);
 uid_t_ sys_getgid(void);
 uid_t_ sys_getegid32(void);
@@ -264,6 +268,7 @@ int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr);
 dword_t sys_getrandom(addr_t buf_addr, dword_t len, dword_t flags);
 int_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
 int_t sys_ipc(uint_t call, int_t first, int_t second, int_t third, addr_t ptr, int_t fifth);
+int_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t cache_addr);
 
 #if GUEST_RISCV64
 typedef sqword_t (*syscall_t)(qword_t, qword_t, qword_t, qword_t, qword_t, qword_t);

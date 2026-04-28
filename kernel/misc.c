@@ -93,6 +93,15 @@ int_t sys_unshare(dword_t flags) {
     return _EPERM;
 }
 
+int_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t UNUSED(cache_addr)) {
+    dword_t zero = 0;
+    if (cpu_addr != 0 && user_put(cpu_addr, zero))
+        return _EFAULT;
+    if (node_addr != 0 && user_put(node_addr, zero))
+        return _EFAULT;
+    return 0;
+}
+
 #define REBOOT_MAGIC1 0xfee1dead
 #define REBOOT_MAGIC2 672274793
 #define REBOOT_MAGIC2A 85072278

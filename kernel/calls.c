@@ -282,6 +282,8 @@ RV_WRAP3(sys_readv, fd_t, addr_t, dword_t)
 RV_WRAP3(sys_writev, fd_t, addr_t, dword_t)
 RV_WRAP4(sys_pread, fd_t, addr_t, dword_t, off_t_)
 RV_WRAP4(sys_pwrite, fd_t, addr_t, dword_t, off_t_)
+RV_WRAP4(sys_preadv, fd_t, addr_t, dword_t, off_t_)
+RV_WRAP4(sys_pwritev, fd_t, addr_t, dword_t, off_t_)
 RV_WRAP4(sys_sendfile64, fd_t, fd_t, addr_t, dword_t)
 RV_WRAP6(sys_pselect, fd_t, addr_t, addr_t, addr_t, addr_t, addr_t)
 RV_WRAP5(sys_ppoll, addr_t, dword_t, addr_t, addr_t, dword_t)
@@ -340,8 +342,10 @@ RV_WRAP2(sys_getpriority, int_t, pid_t_)
 RV_WRAP3(sys_reboot, int_t, int_t, int_t)
 RV_WRAP2(sys_setregid, uid_t_, uid_t_)
 RV_WRAP1(sys_setgid, uid_t)
+RV_WRAP1(sys_setfsgid, uid_t)
 RV_WRAP2(sys_setreuid, uid_t_, uid_t_)
 RV_WRAP1(sys_setuid, uid_t)
+RV_WRAP1(sys_setfsuid, uid_t)
 RV_WRAP3(sys_setresuid, uid_t_, uid_t_, uid_t_)
 RV_WRAP3(sys_getresuid, addr_t, addr_t, addr_t)
 RV_WRAP3(sys_setresgid, uid_t_, uid_t_, uid_t_)
@@ -388,6 +392,7 @@ RV_WRAP2(sys_shutdown, fd_t, dword_t)
 RV_WRAP3(sys_sendmsg, fd_t, addr_t, int_t)
 RV_WRAP3(sys_recvmsg, fd_t, addr_t, int_t)
 RV_WRAP4(sys_sendmmsg, fd_t, addr_t, uint_t, int_t)
+RV_WRAP5(sys_recvmmsg, fd_t, addr_t, uint_t, int_t, addr_t)
 RV_WRAP_ADDR1(sys_brk, addr_t)
 RV_WRAP2(sys_munmap, addr_t, uint_t)
 RV_WRAP4(sys_mremap, addr_t, dword_t, dword_t, dword_t)
@@ -405,6 +410,7 @@ RV_WRAP5(sys_renameat2, fd_t, addr_t, fd_t, addr_t, int_t)
 RV_WRAP3(sys_seccomp, dword_t, dword_t, addr_t)
 RV_WRAP1(sys_unshare, dword_t)
 RV_WRAP3(sys_getrandom, addr_t, dword_t, dword_t)
+RV_WRAP3(sys_getcpu, addr_t, addr_t, addr_t)
 RV_WRAP6(sys_copy_file_range, fd_t, addr_t, fd_t, addr_t, dword_t, uint_t)
 RV_WRAP5(sys_statx, fd_t, addr_t, int_t, uint_t, addr_t)
 RV_WRAP4(sys_fchmodat2, fd_t, addr_t, dword_t, dword_t)
@@ -470,8 +476,8 @@ syscall_t syscall_table[] = {
     [66]  = rv_sys_writev,
     [67]  = rv_sys_pread,
     [68]  = rv_sys_pwrite,
-    [69]  = rv_stub, // preadv not yet represented by the fd layer.
-    [70]  = rv_stub, // pwritev not yet represented by the fd layer.
+    [69]  = rv_sys_preadv,
+    [70]  = rv_sys_pwritev,
     [71]  = rv_sys_sendfile64,
     [72]  = rv_sys_pselect,
     [73]  = rv_sys_ppoll,
@@ -552,8 +558,8 @@ syscall_t syscall_table[] = {
     [148] = rv_sys_getresuid,
     [149] = rv_sys_setresgid,
     [150] = rv_sys_getresgid,
-    [151] = rv_success_stub, // fsuid is not separate from uid in iSH.
-    [152] = rv_success_stub, // fsgid is not separate from gid in iSH.
+    [151] = rv_sys_setfsuid,
+    [152] = rv_sys_setfsgid,
     [153] = rv_sys_times,
     [154] = rv_sys_setpgid,
     [155] = rv_sys_getpgid,
@@ -569,7 +575,7 @@ syscall_t syscall_table[] = {
     [166] = rv_sys_umask,
     [165] = rv_sys_getrusage,
     [167] = rv_sys_prctl,
-    [168] = rv_stub, // getcpu has no guest CPU topology to report.
+    [168] = rv_sys_getcpu,
     [169] = rv_sys_gettimeofday,
     [170] = rv_sys_settimeofday,
     [171] = rv_stub, // adjtimex is host-kernel clock discipline.
@@ -623,7 +629,7 @@ syscall_t syscall_table[] = {
     [240] = rv_stub, // queued realtime signal payload delivery incomplete.
     [241] = rv_stub, // perf_event_open needs host perf virtualization.
     [242] = rv_sys_accept4,
-    [243] = rv_stub, // recvmmsg not represented by socket layer yet.
+    [243] = rv_sys_recvmmsg,
     [258] = rv_sys_riscv_hwprobe,
     [259] = rv_success_stub, // riscv_flush_icache: interpreter has no i-cache.
     [260] = rv_sys_wait4,
