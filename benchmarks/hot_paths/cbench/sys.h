@@ -52,6 +52,7 @@ static long syscall4(long n, long x0, long x1, long x2, long x3) {
 #define SYS_EXIT 93
 #define SYS_OPENAT 56
 #define SYS_PIPE2 59
+#define SYS_LSEEK 62
 #define SYS_CLOCK_GETTIME 113
 #define AT_FDCWD (-100)
 #elif defined(__i386__)
@@ -86,6 +87,7 @@ static long syscall4(long n, long x0, long x1, long x2, long x3) {
 #define SYS_EXIT 1
 #define SYS_OPEN 5
 #define SYS_PIPE 42
+#define SYS_LSEEK 19
 #define SYS_CLOCK_GETTIME 265
 #endif
 
@@ -106,6 +108,10 @@ static long sys_write(int fd, const void *buf, usize n) {
 
 static long sys_close(int fd) {
     return syscall1(SYS_CLOSE, fd);
+}
+
+static long sys_lseek(int fd, long offset, int whence) {
+    return syscall3(SYS_LSEEK, fd, offset, whence);
 }
 
 static long sys_open_rw_create(const char *path) {

@@ -45,7 +45,7 @@ compile_c_benchmarks() {
     target=$1
     out=$2
     mkdir -p "$out"
-    for bench in prime_sieve mandelbrot file_io file_io_small pipe_throughput memory_stream branch_chaining call_return hot_regs; do
+    for bench in prime_sieve mandelbrot file_io file_io_small file_random_write pipe_throughput dev_urandom_stream memory_stream branch_chaining call_return hot_regs; do
         "$CLANG" --target="$target" -O2 -fno-builtin -nostdlib -static -fuse-ld=lld \
             "$ROOT/benchmarks/hot_paths/cbench/start.c" \
             "$ROOT/benchmarks/hot_paths/cbench/$bench.c" \
@@ -99,13 +99,15 @@ summary="$OUT/summary.tsv"
 awk '
     BEGIN {
         FS = OFS = "\t";
-        print "benchmark", "i386_best_s", "i386_avg_s", "i386_rsd_pct", "riscv64_best_s", "riscv64_avg_s", "riscv64_rsd_pct", "riscv64_vs_i386_best";
+        print "benchmark", "i386_best_s", "i386_best_mib_s", "i386_avg_s", "i386_avg_mib_s", "i386_rsd_pct", "riscv64_best_s", "riscv64_best_mib_s", "riscv64_avg_s", "riscv64_avg_mib_s", "riscv64_rsd_pct", "riscv64_vs_i386_best";
     }
     NR == 1 { next }
     {
         best[$1, $2] = $3;
         avg[$1, $2] = $4;
         rsd[$1, $2] = $6;
+        best_mib[$1, $2] = $7;
+        avg_mib[$1, $2] = $8;
         seen[$2] = 1;
     }
     END {
@@ -115,7 +117,7 @@ awk '
                     ratio = "inf";
                 else
                     ratio = sprintf("%.3fx", best["riscv64", name] / best["i386", name]);
-                printf "%s\t%.6f\t%.6f\t%.2f\t%.6f\t%.6f\t%.2f\t%s\n", name, best["i386", name], avg["i386", name], rsd["i386", name], best["riscv64", name], avg["riscv64", name], rsd["riscv64", name], ratio;
+                printf "%s\t%.6f\t%s\t%.6f\t%s\t%.2f\t%.6f\t%s\t%.6f\t%s\t%.2f\t%s\n", name, best["i386", name], best_mib["i386", name], avg["i386", name], avg_mib["i386", name], rsd["i386", name], best["riscv64", name], best_mib["riscv64", name], avg["riscv64", name], avg_mib["riscv64", name], rsd["riscv64", name], ratio;
             }
         }
     }
