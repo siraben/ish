@@ -90,6 +90,8 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_WRITE 64
 #define SYS_READV 65
 #define SYS_WRITEV 66
+#define SYS_PREAD64 67
+#define SYS_PWRITE64 68
 #define SYS_CLOSE 57
 #define SYS_FSTATAT 79
 #define SYS_FSTAT 80
@@ -169,6 +171,8 @@ static long syscall6(long n, long x0, long x1, long x2, long x3, long x4, long x
 #define SYS_WRITE 4
 #define SYS_READV 145
 #define SYS_WRITEV 146
+#define SYS_PREAD64 180
+#define SYS_PWRITE64 181
 #define SYS_CLOSE 6
 #define SYS_FSTATAT 300
 #define SYS_FSTAT 197
@@ -253,6 +257,22 @@ static long sys_readv(int fd, const struct bench_iovec *iov, usize iovcnt) {
 
 static long sys_writev(int fd, const struct bench_iovec *iov, usize iovcnt) {
     return syscall3(SYS_WRITEV, fd, (long) iov, iovcnt);
+}
+
+static long sys_pread(int fd, void *buf, usize n, long offset) {
+#if defined(__riscv)
+    return syscall4(SYS_PREAD64, fd, (long) buf, n, offset);
+#else
+    return syscall5(SYS_PREAD64, fd, (long) buf, n, offset, 0);
+#endif
+}
+
+static long sys_pwrite(int fd, const void *buf, usize n, long offset) {
+#if defined(__riscv)
+    return syscall4(SYS_PWRITE64, fd, (long) buf, n, offset);
+#else
+    return syscall5(SYS_PWRITE64, fd, (long) buf, n, offset, 0);
+#endif
 }
 
 static long sys_close(int fd) {
@@ -352,6 +372,14 @@ static long sys_open_rw_create(const char *path) {
     return syscall4(SYS_OPENAT, AT_FDCWD, (long) path, O_RDWR | O_CREAT | O_TRUNC, 0644);
 #else
     return syscall3(SYS_OPEN, (long) path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+#endif
+}
+
+static long sys_open_rw_create_keep(const char *path) {
+#if defined(__riscv)
+    return syscall4(SYS_OPENAT, AT_FDCWD, (long) path, O_RDWR | O_CREAT, 0644);
+#else
+    return syscall3(SYS_OPEN, (long) path, O_RDWR | O_CREAT, 0644);
 #endif
 }
 
