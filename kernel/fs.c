@@ -242,7 +242,9 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
     return sys_mknodat(AT_FDCWD_, path_addr, mode, dev);
 }
 
-#define SYSCALL_IO_STACK_SIZE (16 * 1024)
+#define SYSCALL_IO_BUFFER_SIZE (64 * 1024)
+
+static _Thread_local char syscall_io_buffer[SYSCALL_IO_BUFFER_SIZE];
 
 static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
     struct fd *fd = f_get(fd_no);
@@ -273,9 +275,16 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
 
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     STRACE("read(%d, 0x%x, %d)", fd_no, buf_addr, size);
-    char stack_buf[SYSCALL_IO_STACK_SIZE];
-    char *buf = stack_buf;
-    if (size > sizeof(stack_buf))
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    if (S_ISDIR(fd->type))
+        return _EISDIR;
+    if (fd->ops->zero_read)
+        return user_memset_bytes(buf_addr, 0, size) ? _EFAULT : size;
+
+    char *buf = syscall_io_buffer;
+    if (size > SYSCALL_IO_BUFFER_SIZE)
         buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
@@ -284,7 +293,7 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
         if (user_write(buf_addr, buf, res))
             res = _EFAULT;
     }
-    if (buf != stack_buf)
+    if (buf != syscall_io_buffer)
         free(buf);
     return res;
 }
@@ -309,9 +318,14 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
 }
 
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
-    char stack_buf[SYSCALL_IO_STACK_SIZE];
-    char *buf = stack_buf;
-    if (size > sizeof(stack_buf))
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    if (fd->ops->discard_write)
+        return sys_write_buf(fd_no, NULL, size);
+
+    char *buf = syscall_io_buffer;
+    if (size > SYSCALL_IO_BUFFER_SIZE)
         buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
@@ -325,7 +339,7 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
 
     res = sys_write_buf(fd_no, buf, size);
 out:
-    if (buf != stack_buf)
+    if (buf != syscall_io_buffer)
         free(buf);
     return res;
 }

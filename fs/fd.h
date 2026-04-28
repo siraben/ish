@@ -166,6 +166,11 @@ struct fd_ops {
     int (*getflags)(struct fd *fd);
     // handle F_SETFL, i.e. set O_NONBLOCK
     int (*setflags)(struct fd *fd, dword_t arg);
+
+    // Writes to this fd do not inspect the user buffer.
+    bool discard_write;
+    // Reads from this fd always fill the user buffer with zeroes.
+    bool zero_read;
 };
 
 struct fdtable {
