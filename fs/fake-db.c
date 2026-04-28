@@ -83,8 +83,16 @@ static char *path_dup(const char *path) {
     return copy;
 }
 
+static unsigned stat_cache_index(const char *path) {
+    return path_hash(path) % FAKEFS_STAT_CACHE_SIZE;
+}
+
 static struct fakefs_stat_cache_entry *stat_cache_entry(struct fakefs_db *fs, const char *path) {
-    return &fs->stat_cache[path_hash(path) % FAKEFS_STAT_CACHE_SIZE];
+    return &fs->stat_cache[stat_cache_index(path)];
+}
+
+static void stat_cache_note_used(struct fakefs_db *fs, unsigned index) {
+    fs->stat_cache_used_indices[fs->stat_cache_used_count++] = index;
 }
 
 static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db *fs, const char *path) {
@@ -95,9 +103,30 @@ static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db 
 }
 
 void stat_cache_clear(struct fakefs_db *fs) {
-    for (unsigned i = 0; i < FAKEFS_STAT_CACHE_SIZE; i++) {
-        free(fs->stat_cache[i].path);
-        fs->stat_cache[i].path = NULL;
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        free(entry->path);
+        entry->path = NULL;
+    }
+    fs->stat_cache_used_count = 0;
+}
+
+static void stat_cache_free(struct fakefs_db *fs) {
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        free(entry->path);
+        entry->path = NULL;
+    }
+    fs->stat_cache_used_count = 0;
+}
+
+static void stat_cache_update_inode(struct fakefs_db *fs, inode_t inode, const struct ish_stat *stat) {
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        if (entry->path != NULL && entry->exists && entry->inode == inode) {
+            entry->stat = *stat;
+            entry->has_stat = true;
+        }
     }
 }
 
@@ -127,11 +156,14 @@ static bool stat_cache_lookup_stat(struct fakefs_db *fs, const char *path, struc
 }
 
 static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t inode, const struct ish_stat *stat) {
-    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    unsigned index = stat_cache_index(path);
+    struct fakefs_stat_cache_entry *entry = &fs->stat_cache[index];
     if (entry->path == NULL || strcmp(entry->path, path) != 0) {
         char *copy = path_dup(path);
         if (copy == NULL)
             return;
+        if (entry->path == NULL)
+            stat_cache_note_used(fs, index);
         free(entry->path);
         entry->path = copy;
     }
@@ -146,11 +178,14 @@ static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t ino
 }
 
 static void stat_cache_store_negative(struct fakefs_db *fs, const char *path) {
-    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    unsigned index = stat_cache_index(path);
+    struct fakefs_stat_cache_entry *entry = &fs->stat_cache[index];
     if (entry->path == NULL || strcmp(entry->path, path) != 0) {
         char *copy = path_dup(path);
         if (copy == NULL)
             return;
+        if (entry->path == NULL)
+            stat_cache_note_used(fs, index);
         free(entry->path);
         entry->path = copy;
     }
@@ -250,7 +285,7 @@ void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat
     fs->cache_generation++;
     if (fs->cache_generation == 0)
         fs->cache_generation = 1;
-    stat_cache_clear(fs);
+    stat_cache_update_inode(fs, inode, stat);
 }
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst) {
@@ -413,7 +448,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
 
 int fake_db_deinit(struct fakefs_db *fs) {
     if (fs->db) {
-        stat_cache_clear(fs);
+        stat_cache_free(fs);
         sqlite3_finalize(fs->stmt.begin_deferred);
         sqlite3_finalize(fs->stmt.begin_immediate);
         sqlite3_finalize(fs->stmt.commit);

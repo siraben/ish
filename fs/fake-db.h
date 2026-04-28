@@ -47,6 +47,8 @@ struct fakefs_db {
     sqlite3_mutex *lock;
     uint64_t cache_generation;
     bool in_write_transaction;
+    unsigned stat_cache_used_count;
+    unsigned stat_cache_used_indices[FAKEFS_STAT_CACHE_SIZE];
     struct fakefs_stat_cache_entry stat_cache[FAKEFS_STAT_CACHE_SIZE];
 };
 

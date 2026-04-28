@@ -244,7 +244,7 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
 }
 
 #define SYSCALL_IO_BUFFER_SIZE (64 * 1024)
-#define DIRECT_IO_MIN_SIZE (16 * 1024)
+#define DIRECT_IO_MIN_SIZE (4 * 1024)
 #define DIRECT_IOV_MAX 64
 
 static _Thread_local char syscall_io_buffer[SYSCALL_IO_BUFFER_SIZE];
