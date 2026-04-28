@@ -302,6 +302,8 @@ dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
     table->files[new_f] = fd;
     if (flags & O_CLOEXEC_)
         bit_set(new_f, table->cloexec);
+    else
+        bit_clear(new_f, table->cloexec);
     return new_f;
 }
 

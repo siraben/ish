@@ -21,6 +21,38 @@
 // this exists only to override readdir to fix the returned inode numbers
 static struct fd_ops fakefs_fdops;
 
+static const char *fakefs_builtin_symlink(const char *path) {
+    if (strcmp(path, "/dev/fd") == 0)
+        return "/proc/self/fd";
+    if (strcmp(path, "/dev/stdin") == 0)
+        return "/proc/self/fd/0";
+    if (strcmp(path, "/dev/stdout") == 0)
+        return "/proc/self/fd/1";
+    if (strcmp(path, "/dev/stderr") == 0)
+        return "/proc/self/fd/2";
+    return NULL;
+}
+
+static ino_t fakefs_builtin_symlink_inode(const char *path) {
+    if (strcmp(path, "/dev/fd") == 0)
+        return 0x7ffff001;
+    if (strcmp(path, "/dev/stdin") == 0)
+        return 0x7ffff002;
+    if (strcmp(path, "/dev/stdout") == 0)
+        return 0x7ffff003;
+    if (strcmp(path, "/dev/stderr") == 0)
+        return 0x7ffff004;
+    return 0;
+}
+
+static void fakefs_builtin_symlink_stat(struct statbuf *stat) {
+    memset(stat, 0, sizeof(*stat));
+    stat->mode = S_IFLNK | 0777;
+    stat->nlink = 1;
+    stat->uid = 0;
+    stat->gid = 0;
+}
+
 static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, int mode) {
     struct fakefs_db *fs = &mount->fakefs;
     struct fd *fd = realfs.open(mount, path, flags, 0666);
@@ -185,6 +217,14 @@ static int fakefs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev
 }
 
 static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fake_stat) {
+    const char *builtin_link = fakefs_builtin_symlink(path);
+    if (builtin_link != NULL) {
+        fakefs_builtin_symlink_stat(fake_stat);
+        fake_stat->inode = fakefs_builtin_symlink_inode(path);
+        fake_stat->size = strlen(builtin_link);
+        return 0;
+    }
+
     struct fakefs_db *fs = &mount->fakefs;
     db_begin_read(fs);
     struct ish_stat ishstat;
@@ -302,6 +342,15 @@ static ssize_t file_readlink(struct mount *mount, const char *path, char *buf, s
 }
 
 static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize) {
+    const char *builtin_link = fakefs_builtin_symlink(path);
+    if (builtin_link != NULL) {
+        size_t len = strlen(builtin_link);
+        if (bufsize > len)
+            bufsize = len;
+        memcpy(buf, builtin_link, bufsize);
+        return bufsize;
+    }
+
     struct fakefs_db *fs = &mount->fakefs;
     db_begin_read(fs);
     struct ish_stat ishstat;

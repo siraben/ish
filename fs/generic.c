@@ -31,9 +31,50 @@ bool contains_mount_point(const char *path) {
     return false;
 }
 
+static bool parse_fd_path(const char *path, fd_t *fd_out) {
+    const char *fd_str = NULL;
+    if (strncmp(path, "/dev/fd/", 8) == 0) {
+        fd_str = path + 8;
+    } else if (strncmp(path, "/proc/self/fd/", 14) == 0) {
+        fd_str = path + 14;
+    } else {
+        return false;
+    }
+
+    if (*fd_str == '\0')
+        return false;
+
+    fd_t fd = 0;
+    for (const char *p = fd_str; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9')
+            return false;
+        fd = fd * 10 + (*p - '0');
+    }
+    *fd_out = fd;
+    return true;
+}
+
+static struct fd *open_fd_path(const char *path) {
+    fd_t fd_no;
+    if (!parse_fd_path(path, &fd_no))
+        return NULL;
+
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return ERR_PTR(_ENOENT);
+    fd_retain(fd);
+    return fd;
+}
+
 struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
+
+    if (at == AT_PWD || path_raw[0] == '/') {
+        struct fd *fd = open_fd_path(path_raw);
+        if (fd != NULL)
+            return fd;
+    }
 
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];
