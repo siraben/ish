@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <errno.h>
 #include <setjmp.h>
 #include "misc.h"
 #include "debug.h"
@@ -130,7 +131,10 @@ static inline void wrlock_init(wrlock_t *lock) {
 
 extern int current_pid(void);
 static inline void wrlock_destroy(wrlock_t *lock) {
-    if (pthread_rwlock_destroy(&lock->l) != 0) __builtin_trap();
+    int err = pthread_rwlock_destroy(&lock->l);
+    if (err == EBUSY)
+        return;
+    if (err != 0) __builtin_trap();
 }
 static inline void read_wrlock(wrlock_t *lock) {
     if (pthread_rwlock_rdlock(&lock->l) != 0) __builtin_trap();

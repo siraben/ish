@@ -17,13 +17,13 @@ typedef uint64_t inode_t;
 #ifndef FAKEFS_STAT_CACHE_SIZE
 #define FAKEFS_STAT_CACHE_SIZE 2048
 #endif
-
 struct fakefs_stat_cache_entry {
     char *path;
     inode_t inode;
     struct ish_stat stat;
     uint64_t generation;
     bool has_stat;
+    bool exists;
 };
 
 struct fakefs_db {

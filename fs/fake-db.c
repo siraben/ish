@@ -95,10 +95,28 @@ static struct fakefs_stat_cache_entry *stat_cache_entry(struct fakefs_db *fs, co
     return &fs->stat_cache[path_hash(path) % FAKEFS_STAT_CACHE_SIZE];
 }
 
-static bool stat_cache_lookup(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
+static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db *fs, const char *path) {
     struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
     if (entry->generation != fs->cache_generation || entry->path == NULL || strcmp(entry->path, path) != 0)
+        return NULL;
+    return entry;
+}
+
+static bool stat_cache_lookup_inode(struct fakefs_db *fs, const char *path, inode_t *inode) {
+    struct fakefs_stat_cache_entry *entry = stat_cache_lookup_entry(fs, path);
+    if (entry == NULL)
         return false;
+    *inode = entry->exists ? entry->inode : 0;
+    return true;
+}
+
+static bool stat_cache_lookup_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode, bool *exists) {
+    struct fakefs_stat_cache_entry *entry = stat_cache_lookup_entry(fs, path);
+    if (entry == NULL)
+        return false;
+    *exists = entry->exists;
+    if (!entry->exists)
+        return true;
     if (inode != NULL)
         *inode = entry->inode;
     if (stat != NULL) {
@@ -119,6 +137,7 @@ static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t ino
         entry->path = copy;
     }
     entry->inode = inode;
+    entry->exists = true;
     if (stat != NULL) {
         entry->stat = *stat;
         entry->has_stat = true;
@@ -128,9 +147,24 @@ static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t ino
     entry->generation = fs->cache_generation;
 }
 
+static void stat_cache_store_negative(struct fakefs_db *fs, const char *path) {
+    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    if (entry->path == NULL || strcmp(entry->path, path) != 0) {
+        char *copy = path_dup(path);
+        if (copy == NULL)
+            return;
+        free(entry->path);
+        entry->path = copy;
+    }
+    entry->inode = 0;
+    entry->has_stat = false;
+    entry->exists = false;
+    entry->generation = fs->cache_generation;
+}
+
 inode_t path_get_inode(struct fakefs_db *fs, const char *path) {
     inode_t cached_inode;
-    if (stat_cache_lookup(fs, path, NULL, &cached_inode))
+    if (stat_cache_lookup_inode(fs, path, &cached_inode))
         return cached_inode;
 
     // select inode from paths where path = ?
@@ -141,11 +175,14 @@ inode_t path_get_inode(struct fakefs_db *fs, const char *path) {
     db_reset(fs, fs->stmt.path_get_inode);
     if (inode != 0)
         stat_cache_store(fs, path, inode, NULL);
+    else
+        stat_cache_store_negative(fs, path);
     return inode;
 }
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
-    if (stat_cache_lookup(fs, path, stat, inode))
-        return true;
+    bool cached_exists;
+    if (stat_cache_lookup_stat(fs, path, stat, inode, &cached_exists))
+        return cached_exists;
 
     // select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?
     bind_path(fs->stmt.path_read_stat, 1, path);
@@ -161,8 +198,11 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
             *stat = found_stat;
     }
     db_reset(fs, fs->stmt.path_read_stat);
-    if (exists)
+    if (exists) {
         stat_cache_store(fs, path, found_inode, &found_stat);
+    } else {
+        stat_cache_store_negative(fs, path);
+    }
     return exists;
 }
 
@@ -281,6 +321,8 @@ extern int fakefs_rebuild(struct fakefs_db *fs, int root_fd);
 extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
+    memset(fs, 0, sizeof(*fs));
+
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
         printk("error opening database: %s\n", sqlite3_errmsg(fs->db));
