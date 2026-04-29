@@ -95,6 +95,8 @@ struct task {
 
 #if GUEST_RISCV64
     bool force_child_clone_return;
+    addr_t altstack;
+    addr_t altstack_size;
 #endif
 
     // current condition/lock, so it can be notified in case of a signal

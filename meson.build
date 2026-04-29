@@ -84,6 +84,7 @@ if get_option('kernel') == 'ish'
         'kernel/random.c',
         'kernel/misc.c',
         'kernel/eventfd.c',
+        'kernel/memfd.c',
         'kernel/ipc.c',
 
         'kernel/fs.c',

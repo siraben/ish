@@ -7,6 +7,8 @@
 #include "kernel/fs.h"
 #include "fs/fd.h"
 
+#define GETDENTS_BUFFER_SIZE (64 * 1024)
+
 static unsigned long fd_telldir(struct fd *fd) {
     unsigned long off = fd->offset;
     if (fd->ops->telldir)
@@ -66,9 +68,9 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
     if (!S_ISDIR(fd->type) || fd->ops->readdir == NULL)
         return _ENOTDIR;
 
-    dword_t orig_count = count;
-    char *out = malloc(count);
-    if (out == NULL && count != 0)
+    dword_t out_capacity = count < GETDENTS_BUFFER_SIZE ? count : GETDENTS_BUFFER_SIZE;
+    char *out = malloc(out_capacity);
+    if (out == NULL && out_capacity != 0)
         return _ENOMEM;
     dword_t used = 0;
 
@@ -99,11 +101,10 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
             printed++;
         }
 
-        if (reclen > count)
+        if (reclen > out_capacity - used)
             break;
         memcpy(out + used, dirent_data, reclen);
         used += reclen;
-        count -= reclen;
     }
 
     fd_seekdir(fd, ptr);
@@ -112,7 +113,7 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         return _EFAULT;
     }
     free(out);
-    return orig_count - count;
+    return used;
 }
 
 int_t sys_getdents(fd_t f, addr_t dirents, uint_t count) {

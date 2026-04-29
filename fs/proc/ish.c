@@ -160,8 +160,16 @@ static int proc_ish_show_version(struct proc_entry *UNUSED(entry), struct proc_d
     return 0;
 }
 
+void sys_compat_show(struct proc_data *buf);
+
+static int proc_ish_show_compat(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    sys_compat_show(buf);
+    return 0;
+}
+
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"colors", .show = proc_ish_show_colors},
+    {"compat", .show = proc_ish_show_compat},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
     {"documents", .show = proc_ish_show_documents},

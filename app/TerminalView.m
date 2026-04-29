@@ -378,10 +378,14 @@ struct rowcol {
 
 // implementing these makes a keyboard pop up when this view is first responder
 
-- (void)insertText:(NSString *)text {
+- (void)prepareForTerminalInput {
     self.markedText = nil;
     if (self.terminal.displayView.hasSelection)
         self.selectedTextRange = [TerminalTextRange rangeWithStart:0 end:0];
+}
+
+- (void)insertText:(NSString *)text {
+    [self prepareForTerminalInput];
 
     if (self.controlKey.highlighted)
         self.controlKey.selected = YES;
@@ -409,7 +413,9 @@ struct rowcol {
 }
 
 - (void)deleteBackward {
-    [self insertText:@"\x7f"];
+    [self prepareForTerminalInput];
+    const char ch = 0x7f;
+    [self.terminal sendInput:[NSData dataWithBytes:&ch length:1]];
 }
 
 - (BOOL)hasText {
@@ -658,11 +664,19 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 
 - (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
     if (@available(iOS 13.4, *)) {
-        UIKey *key = presses.anyObject.key;
-        if (UserPreferences.shared.overrideControlSpace &&
-            key.keyCode == UIKeyboardHIDUsageKeyboardSpacebar &&
-            key.modifierFlags & UIKeyModifierControl) {
-            return [self insertControlChar:' '];
+        for (UIPress *press in presses) {
+            UIKey *key = press.key;
+            if (key == nil)
+                continue;
+            if (key.keyCode == UIKeyboardHIDUsageKeyboardDeleteOrBackspace) {
+                [self deleteBackward];
+                return;
+            }
+            if (UserPreferences.shared.overrideControlSpace &&
+                key.keyCode == UIKeyboardHIDUsageKeyboardSpacebar &&
+                key.modifierFlags & UIKeyModifierControl) {
+                return [self insertControlChar:' '];
+            }
         }
     }
     return [super pressesBegan:presses withEvent:event];

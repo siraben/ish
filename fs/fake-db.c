@@ -1,10 +1,23 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
+#include <unistd.h>
 #include "kernel/errno.h"
+#include "kernel/fs.h"
 #include "debug.h"
 #include "misc.h"
 #include "fs/fake-db.h"
+
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+#ifndef ENODATA
+#define ENODATA ENOATTR
+#endif
 
 static void db_check_error(struct fakefs_db *fs) {
     int errcode = sqlite3_errcode(fs->db);
@@ -66,6 +79,75 @@ static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {
     sqlite3_bind_blob(stmt, i, path, strlen(path), SQLITE_TRANSIENT);
 }
 
+static ssize_t fakefs_fgetxattr(int fd, const char *name, void *value, size_t size) {
+#if defined(__APPLE__)
+    return fgetxattr(fd, name, value, size, 0, 0);
+#elif defined(__linux__)
+    return fgetxattr(fd, name, value, size);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+static int fakefs_fsetxattr(int fd, const char *name, const void *value, size_t size) {
+#if defined(__APPLE__)
+    return fsetxattr(fd, name, value, size, 0, 0);
+#elif defined(__linux__)
+    return fsetxattr(fd, name, value, size, 0);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+static int fakefs_fremovexattr(int fd, const char *name) {
+#if defined(__APPLE__)
+    return fremovexattr(fd, name, 0);
+#elif defined(__linux__)
+    return fremovexattr(fd, name);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+bool fakefs_record_deferred_create(int root_fd, int fd, const char *path, const struct ish_stat *stat) {
+    int marker = openat(root_fd, FAKEFS_PENDING_CREATE_MARKER, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (marker < 0)
+        return false;
+    size_t path_len = strlen(path);
+    bool recorded_path = path_len <= MAX_PATH &&
+        write(marker, path, path_len) == (ssize_t) path_len &&
+        write(marker, "\n", 1) == 1;
+    close(marker);
+    if (!recorded_path)
+        return false;
+
+    struct fakefs_pending_create pending = {
+        .magic = FAKEFS_PENDING_CREATE_MAGIC,
+        .version = FAKEFS_PENDING_CREATE_VERSION,
+        .stat = *stat,
+    };
+    return fakefs_fsetxattr(fd, FAKEFS_PENDING_CREATE_XATTR, &pending, sizeof(pending)) == 0;
+}
+
+static void fakefs_clear_deferred_create_fd(int fd) {
+    if (fakefs_fremovexattr(fd, FAKEFS_PENDING_CREATE_XATTR) < 0 && errno != ENOATTR && errno != ENODATA)
+        return;
+}
+
+static void fakefs_clear_deferred_create_path(int root_fd, const char *path, const struct ish_stat *stat) {
+    int flags = O_RDONLY | O_CLOEXEC;
+    if (S_ISDIR(stat->mode))
+        flags |= O_DIRECTORY;
+    int fd = openat(root_fd, fix_path(path), flags);
+    if (fd < 0)
+        return;
+    fakefs_clear_deferred_create_fd(fd);
+    close(fd);
+}
+
 static uint64_t path_hash(const char *path) {
     uint64_t hash = 1469598103934665603ull;
     while (*path != '\0') {
@@ -83,8 +165,16 @@ static char *path_dup(const char *path) {
     return copy;
 }
 
+static unsigned stat_cache_index(const char *path) {
+    return path_hash(path) % FAKEFS_STAT_CACHE_SIZE;
+}
+
 static struct fakefs_stat_cache_entry *stat_cache_entry(struct fakefs_db *fs, const char *path) {
-    return &fs->stat_cache[path_hash(path) % FAKEFS_STAT_CACHE_SIZE];
+    return &fs->stat_cache[stat_cache_index(path)];
+}
+
+static void stat_cache_note_used(struct fakefs_db *fs, unsigned index) {
+    fs->stat_cache_used_indices[fs->stat_cache_used_count++] = index;
 }
 
 static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db *fs, const char *path) {
@@ -95,10 +185,209 @@ static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db 
 }
 
 void stat_cache_clear(struct fakefs_db *fs) {
-    for (unsigned i = 0; i < FAKEFS_STAT_CACHE_SIZE; i++) {
-        free(fs->stat_cache[i].path);
-        fs->stat_cache[i].path = NULL;
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        free(entry->path);
+        entry->path = NULL;
     }
+    fs->stat_cache_used_count = 0;
+}
+
+static void stat_cache_free(struct fakefs_db *fs) {
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        free(entry->path);
+        entry->path = NULL;
+    }
+    fs->stat_cache_used_count = 0;
+}
+
+static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t inode, const struct ish_stat *stat);
+
+static void stat_cache_update_inode(struct fakefs_db *fs, inode_t inode, const struct ish_stat *stat) {
+    for (unsigned i = 0; i < fs->stat_cache_used_count; i++) {
+        struct fakefs_stat_cache_entry *entry = &fs->stat_cache[fs->stat_cache_used_indices[i]];
+        if (entry->path != NULL && entry->exists && entry->inode == inode) {
+            entry->stat = *stat;
+            entry->has_stat = true;
+        }
+    }
+}
+
+static unsigned stat_writeback_index(inode_t inode) {
+    return (inode * 11400714819323198485ull) % FAKEFS_STAT_WRITEBACK_SIZE;
+}
+
+static struct fakefs_stat_writeback_entry *stat_writeback_find(struct fakefs_db *fs, inode_t inode) {
+    unsigned start = stat_writeback_index(inode);
+    for (unsigned i = 0; i < FAKEFS_STAT_WRITEBACK_SIZE; i++) {
+        struct fakefs_stat_writeback_entry *entry = &fs->stat_writeback[(start + i) % FAKEFS_STAT_WRITEBACK_SIZE];
+        if (!entry->dirty)
+            return NULL;
+        if (entry->inode == inode)
+            return entry;
+    }
+    return NULL;
+}
+
+static bool stat_writeback_lookup(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
+    struct fakefs_stat_writeback_entry *entry = stat_writeback_find(fs, inode);
+    if (entry == NULL)
+        return false;
+    *stat = entry->stat;
+    return true;
+}
+
+static unsigned path_writeback_index(const char *path) {
+    return path_hash(path) % FAKEFS_PATH_WRITEBACK_SIZE;
+}
+
+static struct fakefs_path_writeback_entry *path_writeback_find(struct fakefs_db *fs, const char *path) {
+    unsigned start = path_writeback_index(path);
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[(start + i) % FAKEFS_PATH_WRITEBACK_SIZE];
+        if (!entry->dirty)
+            return NULL;
+        if (strcmp(entry->path, path) == 0)
+            return entry;
+    }
+    return NULL;
+}
+
+static void path_writeback_free(struct fakefs_db *fs) {
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[i];
+        if (!entry->dirty)
+            continue;
+        free(entry->path);
+        entry->path = NULL;
+        entry->dirty = false;
+    }
+    fs->path_writeback_count = 0;
+}
+
+static void path_writeback_flush(struct fakefs_db *fs) {
+    if (fs->path_writeback_count == 0)
+        return;
+    db_exec_reset(fs, fs->stmt.begin_immediate);
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[i];
+        if (!entry->dirty)
+            continue;
+        sqlite3_bind_int64(fs->stmt.path_create_stat, 1, entry->inode);
+        sqlite3_bind_blob(fs->stmt.path_create_stat, 2, &entry->stat, sizeof(entry->stat), SQLITE_TRANSIENT);
+        db_exec_reset(fs, fs->stmt.path_create_stat);
+        bind_path(fs->stmt.path_create_path, 1, entry->path);
+        sqlite3_bind_int64(fs->stmt.path_create_path, 2, entry->inode);
+        db_exec_reset(fs, fs->stmt.path_create_path);
+    }
+    db_exec_reset(fs, fs->stmt.commit);
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[i];
+        if (!entry->dirty)
+            continue;
+        fakefs_clear_deferred_create_path(fs->root_fd, entry->path, &entry->stat);
+        free(entry->path);
+        entry->path = NULL;
+        entry->dirty = false;
+    }
+    fs->path_writeback_count = 0;
+    unlinkat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, 0);
+}
+
+static void stat_writeback_flush(struct fakefs_db *fs) {
+    if (fs->stat_writeback_count == 0)
+        return;
+    path_writeback_flush(fs);
+    db_exec_reset(fs, fs->stmt.begin_immediate);
+    for (unsigned i = 0; i < FAKEFS_STAT_WRITEBACK_SIZE; i++) {
+        struct fakefs_stat_writeback_entry *entry = &fs->stat_writeback[i];
+        if (!entry->dirty)
+            continue;
+        sqlite3_bind_blob(fs->stmt.inode_write_stat, 1, &entry->stat, sizeof(entry->stat), SQLITE_TRANSIENT);
+        sqlite3_bind_int64(fs->stmt.inode_write_stat, 2, entry->inode);
+        db_exec_reset(fs, fs->stmt.inode_write_stat);
+        entry->dirty = false;
+    }
+    db_exec_reset(fs, fs->stmt.commit);
+    fs->stat_writeback_count = 0;
+}
+
+void db_flush_deferred(struct fakefs_db *fs) {
+    path_writeback_flush(fs);
+    stat_writeback_flush(fs);
+}
+
+static void stat_writeback_store(struct fakefs_db *fs, inode_t inode, const struct ish_stat *stat) {
+    struct fakefs_stat_writeback_entry *entry = stat_writeback_find(fs, inode);
+    if (entry != NULL) {
+        entry->stat = *stat;
+        return;
+    }
+    if (fs->stat_writeback_count >= FAKEFS_STAT_WRITEBACK_FLUSH_AT)
+        stat_writeback_flush(fs);
+    unsigned start = stat_writeback_index(inode);
+    for (unsigned i = 0; i < FAKEFS_STAT_WRITEBACK_SIZE; i++) {
+        entry = &fs->stat_writeback[(start + i) % FAKEFS_STAT_WRITEBACK_SIZE];
+        if (!entry->dirty) {
+            entry->inode = inode;
+            entry->stat = *stat;
+            entry->dirty = true;
+            fs->stat_writeback_count++;
+            return;
+        }
+    }
+    die("fakefs stat writeback table full");
+}
+
+static bool path_writeback_lookup(struct fakefs_db *fs, const char *path, inode_t *inode, struct ish_stat *stat) {
+    struct fakefs_path_writeback_entry *entry = path_writeback_find(fs, path);
+    if (entry == NULL)
+        return false;
+    if (inode != NULL)
+        *inode = entry->inode;
+    if (stat != NULL) {
+        *stat = entry->stat;
+        stat_writeback_lookup(fs, entry->inode, stat);
+    }
+    return true;
+}
+
+static bool path_writeback_has_inode(struct fakefs_db *fs, inode_t inode) {
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        struct fakefs_path_writeback_entry *entry = &fs->path_writeback[i];
+        if (entry->dirty && entry->inode == inode)
+            return true;
+    }
+    return false;
+}
+
+static inode_t path_writeback_store(struct fakefs_db *fs, const char *path, const struct ish_stat *stat) {
+    struct fakefs_path_writeback_entry *entry = path_writeback_find(fs, path);
+    if (entry != NULL) {
+        entry->stat = *stat;
+        stat_cache_store(fs, path, entry->inode, stat);
+        return entry->inode;
+    }
+    if (fs->path_writeback_count >= FAKEFS_PATH_WRITEBACK_FLUSH_AT)
+        db_flush_deferred(fs);
+    unsigned start = path_writeback_index(path);
+    for (unsigned i = 0; i < FAKEFS_PATH_WRITEBACK_SIZE; i++) {
+        entry = &fs->path_writeback[(start + i) % FAKEFS_PATH_WRITEBACK_SIZE];
+        if (!entry->dirty) {
+            char *copy = path_dup(path);
+            if (copy == NULL)
+                return 0;
+            entry->path = copy;
+            entry->inode = fs->next_inode++;
+            entry->stat = *stat;
+            entry->dirty = true;
+            fs->path_writeback_count++;
+            stat_cache_store(fs, path, entry->inode, stat);
+            return entry->inode;
+        }
+    }
+    die("fakefs path writeback table full");
 }
 
 static bool stat_cache_lookup_inode(struct fakefs_db *fs, const char *path, inode_t *inode) {
@@ -127,11 +416,14 @@ static bool stat_cache_lookup_stat(struct fakefs_db *fs, const char *path, struc
 }
 
 static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t inode, const struct ish_stat *stat) {
-    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    unsigned index = stat_cache_index(path);
+    struct fakefs_stat_cache_entry *entry = &fs->stat_cache[index];
     if (entry->path == NULL || strcmp(entry->path, path) != 0) {
         char *copy = path_dup(path);
         if (copy == NULL)
             return;
+        if (entry->path == NULL)
+            stat_cache_note_used(fs, index);
         free(entry->path);
         entry->path = copy;
     }
@@ -146,11 +438,14 @@ static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t ino
 }
 
 static void stat_cache_store_negative(struct fakefs_db *fs, const char *path) {
-    struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
+    unsigned index = stat_cache_index(path);
+    struct fakefs_stat_cache_entry *entry = &fs->stat_cache[index];
     if (entry->path == NULL || strcmp(entry->path, path) != 0) {
         char *copy = path_dup(path);
         if (copy == NULL)
             return;
+        if (entry->path == NULL)
+            stat_cache_note_used(fs, index);
         free(entry->path);
         entry->path = copy;
     }
@@ -163,6 +458,10 @@ inode_t path_get_inode(struct fakefs_db *fs, const char *path) {
     inode_t cached_inode;
     if (stat_cache_lookup_inode(fs, path, &cached_inode))
         return cached_inode;
+    if (path_writeback_lookup(fs, path, &cached_inode, NULL)) {
+        stat_cache_store(fs, path, cached_inode, NULL);
+        return cached_inode;
+    }
 
     // select inode from paths where path = ?
     bind_path(fs->stmt.path_get_inode, 1, path);
@@ -180,6 +479,16 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     bool cached_exists;
     if (stat_cache_lookup_stat(fs, path, stat, inode, &cached_exists))
         return cached_exists;
+    inode_t deferred_inode;
+    struct ish_stat deferred_stat;
+    if (path_writeback_lookup(fs, path, &deferred_inode, &deferred_stat)) {
+        if (inode)
+            *inode = deferred_inode;
+        if (stat)
+            *stat = deferred_stat;
+        stat_cache_store(fs, path, deferred_inode, &deferred_stat);
+        return true;
+    }
 
     // select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?
     bind_path(fs->stmt.path_read_stat, 1, path);
@@ -189,6 +498,7 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     if (exists) {
         found_inode = sqlite3_column_int64(fs->stmt.path_read_stat, 0);
         found_stat = *(struct ish_stat *) sqlite3_column_blob(fs->stmt.path_read_stat, 1);
+        stat_writeback_lookup(fs, found_inode, &found_stat);
         if (inode)
             *inode = found_inode;
         if (stat)
@@ -218,15 +528,20 @@ bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_st
 }
 
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
+    inode_t inode = fs->next_inode++;
     // insert into stats (stat) values (?)
-    sqlite3_bind_blob(fs->stmt.path_create_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
+    sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
+    sqlite3_bind_blob(fs->stmt.path_create_stat, 2, stat, sizeof(*stat), SQLITE_TRANSIENT);
     db_exec_reset(fs, fs->stmt.path_create_stat);
-    inode_t inode = sqlite3_last_insert_rowid(fs->db);
     // insert or replace into paths values (?, last_insert_rowid())
     bind_path(fs->stmt.path_create_path, 1, path);
+    sqlite3_bind_int64(fs->stmt.path_create_path, 2, inode);
     db_exec_reset(fs, fs->stmt.path_create_path);
     stat_cache_store(fs, path, inode, stat);
     return inode;
+}
+inode_t path_defer_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
+    return path_writeback_store(fs, path, stat);
 }
 
 void inode_read_stat_or_die(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
@@ -234,6 +549,8 @@ void inode_read_stat_or_die(struct fakefs_db *fs, inode_t inode, struct ish_stat
         die("inode_read_stat(%llu): missing inode", (unsigned long long) inode);
 }
 bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
+    if (stat_writeback_lookup(fs, inode, stat))
+        return true;
     // select stat from stats where inode = ?
     sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
     bool exist = db_exec(fs, fs->stmt.inode_read_stat);
@@ -243,6 +560,10 @@ bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_st
     return exist;
 }
 void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
+    if (path_writeback_has_inode(fs, inode)) {
+        inode_defer_write_stat(fs, inode, stat);
+        return;
+    }
     // update stats set stat = ? where inode = ?
     sqlite3_bind_blob(fs->stmt.inode_write_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
     sqlite3_bind_int64(fs->stmt.inode_write_stat, 2, inode);
@@ -250,7 +571,14 @@ void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat
     fs->cache_generation++;
     if (fs->cache_generation == 0)
         fs->cache_generation = 1;
-    stat_cache_clear(fs);
+    stat_cache_update_inode(fs, inode, stat);
+}
+void inode_defer_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
+    stat_writeback_store(fs, inode, stat);
+    fs->cache_generation++;
+    if (fs->cache_generation == 0)
+        fs->cache_generation = 1;
+    stat_cache_update_inode(fs, inode, stat);
 }
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst) {
@@ -296,6 +624,48 @@ void path_rename(struct fakefs_db *fs, const char *src, const char *dst) {
     stat_cache_clear(fs);
 }
 
+static void fakefs_recover_pending_path(struct fakefs_db *fs, int fd, const char *path) {
+    struct fakefs_pending_create pending = {};
+    ssize_t size = fakefs_fgetxattr(fd, FAKEFS_PENDING_CREATE_XATTR, &pending, sizeof(pending));
+    if (size != sizeof(pending) ||
+            pending.magic != FAKEFS_PENDING_CREATE_MAGIC ||
+            pending.version != FAKEFS_PENDING_CREATE_VERSION)
+        return;
+    if (path_get_inode(fs, path) == 0)
+        path_create(fs, path, &pending.stat);
+    fakefs_clear_deferred_create_fd(fd);
+}
+
+static void fakefs_recover_pending_creates(struct fakefs_db *fs) {
+    int marker = openat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, O_RDONLY | O_CLOEXEC);
+    if (marker < 0)
+        return;
+    FILE *marker_file = fdopen(marker, "r");
+    if (marker_file == NULL) {
+        close(marker);
+        return;
+    }
+
+    db_exec_reset(fs, fs->stmt.begin_immediate);
+    char path[MAX_PATH + 2];
+    while (fgets(path, sizeof(path), marker_file) != NULL) {
+        size_t len = strlen(path);
+        if (len == 0 || path[len - 1] != '\n')
+            continue;
+        path[len - 1] = '\0';
+        if (path[0] != '/' || path[1] == '\0')
+            continue;
+        int fd = openat(fs->root_fd, fix_path(path), O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+            continue;
+        fakefs_recover_pending_path(fs, fd, path);
+        close(fd);
+    }
+    db_exec_reset(fs, fs->stmt.commit);
+    fclose(marker_file);
+    unlinkat(fs->root_fd, FAKEFS_PENDING_CREATE_MARKER, 0);
+}
+
 #if DEBUG_sql
 static int trace_callback(unsigned UNUSED(why), void *UNUSED(fuck), void *stmt, void *_sql) {
     char *sql = _sql;
@@ -323,6 +693,7 @@ extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     memset(fs, 0, sizeof(*fs));
+    fs->root_fd = root_fd;
 
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
@@ -391,6 +762,14 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
+    statement = db_prepare(fs, "select coalesce(max(inode), 0) + 1 from stats");
+    if (sqlite3_step(statement) == SQLITE_ROW)
+        fs->next_inode = sqlite3_column_int64(statement, 0);
+    db_check_error(fs);
+    sqlite3_finalize(statement);
+    if (fs->next_inode == 0)
+        fs->next_inode = 1;
+
     fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
     fs->stmt.begin_deferred = db_prepare(fs, "begin deferred");
     fs->stmt.begin_immediate = db_prepare(fs, "begin immediate");
@@ -398,8 +777,8 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     fs->stmt.rollback = db_prepare(fs, "rollback");
     fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
     fs->stmt.path_read_stat = db_prepare(fs, "select paths.inode, stats.stat from paths join stats on stats.inode = paths.inode where paths.path = ?");
-    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (stat) values (?)");
-    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, last_insert_rowid())");
+    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (inode, stat) values (?, ?)");
+    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, ?)");
     fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");
     fs->stmt.inode_write_stat = db_prepare(fs, "update stats set stat = ? where inode = ?");
     fs->stmt.path_link = db_prepare(fs, "insert or replace into paths (path, inode) values (?, ?)");
@@ -408,12 +787,17 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
             "where (path >= ? and path < ?) or path = ?");
     fs->stmt.path_from_inode = db_prepare(fs, "select path from paths where inode = ?");
     fs->stmt.try_cleanup_inode = db_prepare(fs, "delete from stats where inode = ? and not exists (select 1 from paths where inode = stats.inode)");
+    fakefs_recover_pending_creates(fs);
     return 0;
 }
 
 int fake_db_deinit(struct fakefs_db *fs) {
     if (fs->db) {
-        stat_cache_clear(fs);
+        sqlite3_mutex_enter(fs->lock);
+        db_flush_deferred(fs);
+        sqlite3_mutex_leave(fs->lock);
+        path_writeback_free(fs);
+        stat_cache_free(fs);
         sqlite3_finalize(fs->stmt.begin_deferred);
         sqlite3_finalize(fs->stmt.begin_immediate);
         sqlite3_finalize(fs->stmt.commit);

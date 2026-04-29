@@ -103,7 +103,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 @property (nonatomic) UIFont *regularFont;
 @property (nonatomic) UIFont *boldFont;
 @property (nonatomic) GhosttyColorRgb foregroundColor;
-@property (nonatomic) GhosttyColorRgb backgroundColor;
+@property (nonatomic) GhosttyColorRgb terminalBackgroundColor;
 @property (nonatomic) GhosttyColorRgb cursorColor;
 @property (nonatomic) BOOL cursorColorSet;
 @property (nonatomic) BOOL blinkCursor;
@@ -118,6 +118,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     BOOL _needsRenderStateUpdate;
     BOOL _updatingScrollView;
     BOOL _benchmarkEnabled;
+    BOOL _visibleCellsDirty;
     NSUInteger _benchmarkSamples;
     size_t _benchmarkBytes;
     CFTimeInterval _benchmarkVTTime;
@@ -137,13 +138,14 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         self.regularFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightRegular);
         self.boldFont = TerminalFontForFamily(@"ui-monospace", 12, UIFontWeightBold);
         self.foregroundColor = (GhosttyColorRgb) {.r = 255, .g = 255, .b = 255};
-        self.backgroundColor = (GhosttyColorRgb) {.r = 0, .g = 0, .b = 0};
+        self.terminalBackgroundColor = (GhosttyColorRgb) {.r = 0, .g = 0, .b = 0};
         self.cursorColor = self.foregroundColor;
         self.cursorShape = @"BLOCK";
         self.columns = DefaultColumns;
         self.rows = DefaultRows;
         _benchmarkEnabled = [NSProcessInfo.processInfo.environment[@"ISH_BENCH_TERMINAL_DISPLAY"] boolValue];
         _visibleCells = [NSMutableArray new];
+        _visibleCellsDirty = YES;
 
         [self updateCharacterSize];
 
@@ -159,7 +161,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_USERDATA, (__bridge void *) self);
         ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *) GhosttyWritePty);
         ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &_foregroundColor);
-        ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &_backgroundColor);
+        ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &_terminalBackgroundColor);
 
         ghostty_render_state_new(NULL, &_renderState);
         ghostty_render_state_row_iterator_new(NULL, &_rowIterator);
@@ -256,6 +258,14 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
         return;
     _needsRenderStateUpdate = NO;
     ghostty_render_state_update(_renderState, _terminal);
+    _visibleCellsDirty = YES;
+}
+
+- (void)ensureVisibleCells {
+    [self updateRenderStateIfNeeded];
+    if (!_visibleCellsDirty)
+        return;
+    _visibleCellsDirty = NO;
     [self updateVisibleCells];
 }
 
@@ -316,7 +326,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     self.regularFont = TerminalFontForFamily(fontFamily, fontSize, UIFontWeightRegular);
     self.boldFont = TerminalFontForFamily(fontFamily, fontSize, UIFontWeightBold);
     self.foregroundColor = GhosttyColorFromHex(foregroundColor, self.foregroundColor);
-    self.backgroundColor = GhosttyColorFromHex(backgroundColor, self.backgroundColor);
+    self.terminalBackgroundColor = GhosttyColorFromHex(backgroundColor, self.terminalBackgroundColor);
     if (cursorColor != nil) {
         self.cursorColor = GhosttyColorFromHex(cursorColor, self.foregroundColor);
         self.cursorColorSet = YES;
@@ -328,7 +338,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 
     if (_terminal != NULL) {
         ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &_foregroundColor);
-        ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &_backgroundColor);
+        ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &_terminalBackgroundColor);
         if (_cursorColorSet)
             ghostty_terminal_set(_terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &_cursorColor);
         else
@@ -476,6 +486,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 }
 
 - (NSString *)textInCellRange:(NSRange)range {
+    [self ensureVisibleCells];
     if (_visibleCells.count == 0 || range.length == 0 || self.columns <= 0)
         return @"";
 
@@ -532,6 +543,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
 }
 
 - (NSString *)visibleText {
+    [self ensureVisibleCells];
     if (_visibleCells.count == 0)
         return @"";
     NSMutableArray<NSString *> *lines = [NSMutableArray arrayWithCapacity:_visibleCells.count];
@@ -572,7 +584,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     (void) rect;
     CFTimeInterval start = CACurrentMediaTime();
     CGContextRef context = UIGraphicsGetCurrentContext();
-    [UIColorFromGhosttyColor(self.backgroundColor) setFill];
+    [UIColorFromGhosttyColor(self.terminalBackgroundColor) setFill];
     CGContextFillRect(context, self.bounds);
 
     [self updateRenderStateIfNeeded];
@@ -582,7 +594,7 @@ static CGFloat TerminalASCIIAdvance(UIFont *font) {
     GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
     if (ghostty_render_state_colors_get(_renderState, &colors) != GHOSTTY_SUCCESS) {
         colors.foreground = self.foregroundColor;
-        colors.background = self.backgroundColor;
+        colors.background = self.terminalBackgroundColor;
     }
 
     if (ghostty_render_state_get(_renderState, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &_rowIterator) != GHOSTTY_SUCCESS)

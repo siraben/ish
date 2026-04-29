@@ -14,15 +14,50 @@ struct ish_stat {
 
 typedef uint64_t inode_t;
 
+#if defined(__APPLE__)
+#define FAKEFS_PENDING_CREATE_XATTR "org.ish.fakefs.pending-create"
+#else
+#define FAKEFS_PENDING_CREATE_XATTR "user.ish.fakefs.pending-create"
+#endif
+#define FAKEFS_PENDING_CREATE_MARKER ".fakefs-pending"
+#define FAKEFS_PENDING_CREATE_MAGIC 0x69736870u
+#define FAKEFS_PENDING_CREATE_VERSION 1u
+struct fakefs_pending_create {
+    uint32_t magic;
+    uint32_t version;
+    struct ish_stat stat;
+};
+
 #ifndef FAKEFS_STAT_CACHE_SIZE
 #define FAKEFS_STAT_CACHE_SIZE 32768
 #endif
+#ifndef FAKEFS_STAT_WRITEBACK_SIZE
+#define FAKEFS_STAT_WRITEBACK_SIZE 4096
+#endif
+#ifndef FAKEFS_PATH_WRITEBACK_SIZE
+#define FAKEFS_PATH_WRITEBACK_SIZE 8192
+#endif
+#define FAKEFS_STAT_WRITEBACK_FLUSH_AT (FAKEFS_STAT_WRITEBACK_SIZE / 2)
+#define FAKEFS_PATH_WRITEBACK_FLUSH_AT (FAKEFS_PATH_WRITEBACK_SIZE / 2)
 struct fakefs_stat_cache_entry {
     char *path;
     inode_t inode;
     struct ish_stat stat;
     bool has_stat;
     bool exists;
+};
+
+struct fakefs_stat_writeback_entry {
+    inode_t inode;
+    struct ish_stat stat;
+    bool dirty;
+};
+
+struct fakefs_path_writeback_entry {
+    char *path;
+    inode_t inode;
+    struct ish_stat stat;
+    bool dirty;
 };
 
 struct fakefs_db {
@@ -45,9 +80,17 @@ struct fakefs_db {
         sqlite3_stmt *try_cleanup_inode;
     } stmt;
     sqlite3_mutex *lock;
+    int root_fd;
+    inode_t next_inode;
     uint64_t cache_generation;
     bool in_write_transaction;
+    unsigned stat_cache_used_count;
+    unsigned stat_cache_used_indices[FAKEFS_STAT_CACHE_SIZE];
     struct fakefs_stat_cache_entry stat_cache[FAKEFS_STAT_CACHE_SIZE];
+    unsigned stat_writeback_count;
+    struct fakefs_stat_writeback_entry stat_writeback[FAKEFS_STAT_WRITEBACK_SIZE];
+    unsigned path_writeback_count;
+    struct fakefs_path_writeback_entry path_writeback[FAKEFS_PATH_WRITEBACK_SIZE];
 };
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd);
@@ -61,17 +104,21 @@ void db_rollback(struct fakefs_db *fs);
 bool db_exec(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
+void db_flush_deferred(struct fakefs_db *fs);
 void stat_cache_clear(struct fakefs_db *fs);
+bool fakefs_record_deferred_create(int root_fd, int fd, const char *path, const struct ish_stat *stat);
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat);
+inode_t path_defer_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat);
 inode_t path_get_inode_cached(struct fakefs_db *fs, const char *path);
 bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
 
 bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
 void inode_read_stat_or_die(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
 void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
+void inode_defer_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst);
 inode_t path_unlink(struct fakefs_db *fs, const char *path);

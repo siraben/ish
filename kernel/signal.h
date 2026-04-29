@@ -13,6 +13,8 @@ typedef qword_t sigset_t_;
 #define SIG_IGN_ 1
 
 #define SA_SIGINFO_ 4
+#define SA_ONSTACK_ 0x08000000
+#define SA_RESTART_ 0x10000000
 #define SA_NODEFER_ 0x40000000
 #define SA_RESETHAND_ 0x80000000
 
@@ -20,11 +22,13 @@ struct sigaction_ {
     addr_t handler;
 #if GUEST_RISCV64
     qword_t flags;
+    sigset_t_ mask;
+    addr_t restorer;
 #else
     dword_t flags;
-#endif
     addr_t restorer;
     sigset_t_ mask;
+#endif
 #if GUEST_RISCV64
 };
 #else
@@ -67,6 +71,7 @@ struct sigaction_ {
 #define SIGSYS_    31
 
 #define SI_USER_ 0
+#define SI_QUEUE_ -1
 #define SI_TIMER_ -2
 #define SI_TKILL_ -6
 #define SI_KERNEL_ 128
@@ -84,6 +89,11 @@ struct siginfo_ {
     int_t sig_errno;
     int_t code;
     union {
+        struct {
+            pid_t_ pid;
+            uid_t_ uid;
+            union sigval_ value;
+        } queue;
         struct {
             pid_t_ pid;
             uid_t_ uid;
@@ -204,6 +214,8 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
 dword_t sys_kill(pid_t_ pid, dword_t sig);
 dword_t sys_tkill(pid_t_ tid, dword_t sig);
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig);
+dword_t sys_rt_sigqueueinfo(pid_t_ pid, dword_t sig, addr_t info_addr);
+dword_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, dword_t sig, addr_t info_addr);
 
 // signal frame structs. There's a good chance this should go in its own header file
 

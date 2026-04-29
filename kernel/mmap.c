@@ -47,20 +47,30 @@ void mm_release(struct mm *mm) {
     }
 }
 
-static addr_t do_mmap(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
+static bool mmap_range_valid(page_t page, pages_t pages) {
+    return pages <= MEM_PAGES && page <= MEM_PAGES - pages;
+}
+
+static addr_t do_mmap(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, off_t_ offset) {
     int err;
     pages_t pages = PAGE_ROUND_UP(len);
     if (!pages) return _EINVAL;
     page_t page;
-    if (addr != 0) {
+    bool fixed = flags & (MMAP_FIXED | MMAP_FIXED_NOREPLACE);
+    if (addr != 0 || fixed) {
         if (PGOFFSET(addr) != 0)
             return _EINVAL;
         page = PAGE(addr);
-        if (!(flags & MMAP_FIXED) && !pt_is_hole(current->mem, page, pages)) {
+        bool valid = mmap_range_valid(page, pages);
+        if (fixed && !valid)
+            return _ENOMEM;
+        if (fixed && (flags & MMAP_FIXED_NOREPLACE) && !pt_is_hole(current->mem, page, pages))
+            return _EEXIST;
+        if (!fixed && (!valid || !pt_is_hole(current->mem, page, pages))) {
             addr = 0;
         }
     }
-    if (addr == 0) {
+    if (addr == 0 && !fixed) {
         page = pt_find_hole(current->mem, pages);
         if (page == BAD_PAGE)
             return _ENOMEM;
@@ -87,8 +97,8 @@ static addr_t do_mmap(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_
     return page << PAGE_BITS;
 }
 
-static addr_t mmap_common(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
-    STRACE("mmap(0x%x, 0x%x, 0x%x, 0x%x, %d, %d)", addr, len, prot, flags, fd_no, offset);
+static addr_t mmap_common(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, off_t_ offset) {
+    STRACE("mmap(0x%x, 0x%x, 0x%x, 0x%x, %d, %lld)", addr, len, prot, flags, fd_no, (long long) offset);
     if (len == 0)
         return _EINVAL;
     if (prot & ~P_RWX)
@@ -115,11 +125,9 @@ addr_t sys_mmap_riscv64(addr_t addr, qword_t len, qword_t prot, qword_t flags, q
         return _EINVAL;
     if ((sqword_t) fd_no < INT32_MIN || (sqword_t) fd_no > INT32_MAX)
         return _EBADF;
-    if (offset > UINT32_MAX) {
-        FIXME("rv64 mmap offset truncated: 0x%llx", (unsigned long long) offset);
+    if (offset > INT64_MAX)
         return _EINVAL;
-    }
-    return mmap_common(addr, (dword_t) len, (dword_t) prot, (dword_t) flags, (fd_t) fd_no, (dword_t) offset);
+    return mmap_common(addr, (dword_t) len, (dword_t) prot, (dword_t) flags, (fd_t) fd_no, (off_t_) offset);
 }
 
 struct mmap_arg_struct {
@@ -160,8 +168,8 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
         FIXME("missing MREMAP_FIXED");
         return _EINVAL;
     }
-    pages_t old_pages = PAGE(old_len);
-    pages_t new_pages = PAGE(new_len);
+    pages_t old_pages = PAGE_ROUND_UP(old_len);
+    pages_t new_pages = PAGE_ROUND_UP(new_len);
 
     // shrinking always works
     if (new_pages <= old_pages) {
@@ -177,7 +185,7 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
     dword_t pt_flags = entry->flags;
     for (page_t page = PAGE(addr); page < PAGE(addr) + old_pages; page++) {
         entry = mem_pt(current->mem, page);
-        if (entry == NULL && entry->flags != pt_flags)
+        if (entry == NULL || entry->flags != pt_flags)
             return _EFAULT;
     }
     if (!(pt_flags & P_ANONYMOUS)) {
