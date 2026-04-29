@@ -83,6 +83,7 @@
 		497F6D29254E5EA600C82F46 /* ipc.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C7A254E5C9700C82F46 /* ipc.c */; };
 		497F6D2A254E5EA600C82F46 /* log.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C83254E5C9700C82F46 /* log.c */; };
 		497F6D2B254E5EA600C82F46 /* misc.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C85254E5C9700C82F46 /* misc.c */; };
+		49C0D0312D2F100100000031 /* memfd.c in Sources */ = {isa = PBXBuildFile; fileRef = 49C0D0302D2F100100000030 /* memfd.c */; };
 		497F6D2C254E5EA600C82F46 /* mmap.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C9D254E5C9800C82F46 /* mmap.c */; };
 		497F6D2D254E5EA600C82F46 /* poll.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C94254E5C9800C82F46 /* poll.c */; };
 		497F6D2E254E5EA600C82F46 /* ptrace.c in Sources */ = {isa = PBXBuildFile; fileRef = 497F6C8A254E5C9700C82F46 /* ptrace.c */; };
@@ -570,6 +571,7 @@
 		497F6C9A254E5C9800C82F46 /* futex.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = futex.h; sourceTree = "<group>"; };
 		497F6C9B254E5C9800C82F46 /* futex.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = futex.c; sourceTree = "<group>"; };
 		497F6C9C254E5C9800C82F46 /* task.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = task.h; sourceTree = "<group>"; };
+		49C0D0302D2F100100000030 /* memfd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = memfd.c; sourceTree = "<group>"; };
 		497F6C9D254E5C9800C82F46 /* mmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mmap.c; sourceTree = "<group>"; };
 		497F6C9E254E5C9800C82F46 /* random.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = random.h; sourceTree = "<group>"; };
 		497F6C9F254E5C9800C82F46 /* calls.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = calls.c; sourceTree = "<group>"; };
@@ -1150,6 +1152,7 @@
 				497F6C7A254E5C9700C82F46 /* ipc.c */,
 				497F6C83254E5C9700C82F46 /* log.c */,
 				497F6C85254E5C9700C82F46 /* misc.c */,
+				49C0D0302D2F100100000030 /* memfd.c */,
 				497F6C77254E5C9700C82F46 /* mm.h */,
 				497F6C9D254E5C9800C82F46 /* mmap.c */,
 				497F6C92254E5C9800C82F46 /* personality.h */,
@@ -2096,6 +2099,7 @@
 				497F6D29254E5EA600C82F46 /* ipc.c in Sources */,
 				497F6D2A254E5EA600C82F46 /* log.c in Sources */,
 				497F6D2B254E5EA600C82F46 /* misc.c in Sources */,
+				49C0D0312D2F100100000031 /* memfd.c in Sources */,
 				497F6D2C254E5EA600C82F46 /* mmap.c in Sources */,
 				497F6D2D254E5EA600C82F46 /* poll.c in Sources */,
 				497F6D2E254E5EA600C82F46 /* ptrace.c in Sources */,

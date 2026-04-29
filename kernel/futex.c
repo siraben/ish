@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "kernel/calls.h"
 #include "util/timer.h"
 
@@ -19,8 +21,10 @@ struct futex {
 };
 
 struct futex_wait {
-    cond_t cond;
+    cond_t *cond;
     struct futex *futex; // will be changed by a requeue
+    unsigned index;
+    bool woken;
     struct list queue;
 };
 
@@ -46,10 +50,8 @@ static struct futex *futex_get_unlocked(addr_t addr) {
     }
 
     futex = malloc(sizeof(struct futex));
-    if (futex == NULL) {
-        unlock(&futex_lock);
+    if (futex == NULL)
         return NULL;
-    }
     futex->refcount = 1;
     futex->mem = current->mem;
     futex->addr = addr;
@@ -103,11 +105,12 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
     else if (tmp != val)
         err = _EAGAIN;
     else {
-        struct futex_wait wait;
-        wait.cond = COND_INITIALIZER;
+        cond_t cond = COND_INITIALIZER;
+        struct futex_wait wait = {};
+        wait.cond = &cond;
         wait.futex = futex;
         list_add_tail(&futex->queue, &wait.queue);
-        err = wait_for(&wait.cond, &futex_lock, timeout);
+        err = wait_for(wait.cond, &futex_lock, timeout);
         futex = wait.futex;
         list_remove_safe(&wait.queue);
     }
@@ -124,7 +127,8 @@ static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeu
     list_for_each_entry_safe(&futex->queue, wait, tmp, queue) {
         if (woken >= wake_max)
             break;
-        notify(&wait->cond);
+        wait->woken = true;
+        notify(wait->cond);
         list_remove(&wait->queue);
         woken++;
     }
@@ -150,6 +154,65 @@ static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeu
 
     futex_put(futex);
     return woken;
+}
+
+int_t sys_futex_wait_multiple(struct futex_waiter_ *requests, dword_t count, struct timespec *timeout) {
+    if (count == 0)
+        return _EINVAL;
+
+    struct futex_wait *waits = calloc(count, sizeof(*waits));
+    if (waits == NULL)
+        return _ENOMEM;
+
+    cond_t cond = COND_INITIALIZER;
+    int err = 0;
+
+    lock(&futex_lock);
+    for (dword_t i = 0; i < count; i++) {
+        struct futex *futex = futex_get_unlocked(requests[i].uaddr);
+        if (futex == NULL) {
+            err = _ENOMEM;
+            goto out;
+        }
+
+        dword_t tmp;
+        if (futex_load(futex, &tmp)) {
+            futex_put_unlocked(futex);
+            err = _EFAULT;
+            goto out;
+        }
+        if (tmp != requests[i].val) {
+            futex_put_unlocked(futex);
+            err = _EAGAIN;
+            goto out;
+        }
+
+        waits[i].cond = &cond;
+        waits[i].futex = futex;
+        waits[i].index = i;
+        list_add_tail(&futex->queue, &waits[i].queue);
+    }
+
+    err = wait_for(&cond, &futex_lock, timeout);
+out:
+    ;
+    int woken = -1;
+    for (dword_t i = 0; i < count; i++) {
+        if (waits[i].futex == NULL)
+            continue;
+        if (waits[i].woken && woken < 0)
+            woken = waits[i].index;
+        list_remove_safe(&waits[i].queue);
+        futex_put_unlocked(waits[i].futex);
+    }
+    unlock(&futex_lock);
+    free(waits);
+
+    if (err < 0)
+        return err;
+    if (woken >= 0)
+        return woken;
+    return 0;
 }
 
 int futex_wake(addr_t uaddr, dword_t wake_max) {

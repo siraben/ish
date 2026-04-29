@@ -35,6 +35,8 @@ ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize);
 ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize);
 ssize_t realfs_readv(struct fd *fd, const struct iovec *iov, int iovcnt);
 ssize_t realfs_writev(struct fd *fd, const struct iovec *iov, int iovcnt);
+ssize_t realfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off);
+ssize_t realfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off);
 ssize_t realfs_preadv(struct fd *fd, const struct iovec *iov, int iovcnt, off_t off);
 ssize_t realfs_pwritev(struct fd *fd, const struct iovec *iov, int iovcnt, off_t off);
 

@@ -24,6 +24,11 @@ struct rv_siginfo_ {
         struct {
             pid_t_ pid;
             uid_t_ uid;
+            union sigval_ value;
+        } queue;
+        struct {
+            pid_t_ pid;
+            uid_t_ uid;
         } kill;
         struct {
             pid_t_ pid;
@@ -182,6 +187,11 @@ static struct rv_siginfo_ rv_siginfo_from_siginfo(struct siginfo_ info) {
         user_info.kill.pid = info.kill.pid;
         user_info.kill.uid = info.kill.uid;
         break;
+    case SI_QUEUE_:
+        user_info.queue.pid = info.queue.pid;
+        user_info.queue.uid = info.queue.uid;
+        user_info.queue.value = info.queue.value;
+        break;
     case SI_TIMER_:
         user_info.timer.timer = info.timer.timer;
         user_info.timer.overrun = info.timer.overrun;
@@ -208,6 +218,35 @@ static struct rv_siginfo_ rv_siginfo_from_siginfo(struct siginfo_ info) {
     }
 
     return user_info;
+}
+
+static struct siginfo_ siginfo_from_rv_siginfo(struct rv_siginfo_ user_info) {
+    struct siginfo_ info = {
+        .sig = user_info.sig,
+        .sig_errno = user_info.sig_errno,
+        .code = user_info.code,
+    };
+    switch (user_info.code) {
+    case SI_USER_:
+    case SI_TKILL_:
+        info.kill.pid = user_info.kill.pid;
+        info.kill.uid = user_info.kill.uid;
+        break;
+    case SI_QUEUE_:
+        info.queue.pid = user_info.queue.pid;
+        info.queue.uid = user_info.queue.uid;
+        info.queue.value = user_info.queue.value;
+        break;
+    case SI_TIMER_:
+        info.timer.timer = user_info.timer.timer;
+        info.timer.overrun = user_info.timer.overrun;
+        info.timer.value = user_info.timer.value;
+        info.timer._private = user_info.timer._private;
+        break;
+    default:
+        break;
+    }
+    return info;
 }
 
 static sigset_t_ signalfd_sanitize_mask(sigset_t_ mask) {
@@ -442,8 +481,11 @@ static void altstack_to_user(struct stack_t_ *user_stack) {
 static int setup_signal_handler(struct sigqueue *sigqueue) {
     int sig = sigqueue->info.sig;
     struct sigaction_ *action = &current->sighand->action[sig];
+    addr_t handler = action->handler;
+    qword_t flags = action->flags;
+    sigset_t_ mask = action->mask;
     addr_t sp = current->cpu.sp;
-    if ((action->flags & SA_ONSTACK_) && current->altstack != 0 &&
+    if ((flags & SA_ONSTACK_) && current->altstack != 0 &&
             !is_on_altstack(sp)) {
         sp = current->altstack + current->altstack_size;
     }
@@ -466,14 +508,16 @@ static int setup_signal_handler(struct sigqueue *sigqueue) {
         return _EFAULT;
 
     current->cpu.ra = frame_addr + offsetof(struct rv_rt_sigframe, sigreturn_code);
-    current->cpu.pc = action->handler;
+    current->cpu.pc = handler;
     current->cpu.sp = frame_addr;
     current->cpu.a0 = sig;
     current->cpu.a1 = frame_addr + offsetof(struct rv_rt_sigframe, info);
     current->cpu.a2 = frame_addr + offsetof(struct rv_rt_sigframe, uc);
 
-    sigmask_set(current->blocked | action->mask |
-        ((action->flags & SA_NODEFER_) ? 0 : sig_mask(sig)));
+    if (flags & SA_RESETHAND_)
+        *action = (struct sigaction_) {.handler = SIG_DFL_};
+    sigmask_set(current->blocked | mask |
+        ((flags & SA_NODEFER_) ? 0 : sig_mask(sig)));
     return 0;
 }
 
@@ -879,20 +923,24 @@ static struct fd_ops signalfd_ops = {
     .poll = signalfd_poll,
 };
 
-static int kill_task(struct task *task, dword_t sig) {
+static int kill_task_info(struct task *task, dword_t sig, struct siginfo_ info) {
     if (!superuser() &&
             current->uid != task->uid &&
             current->uid != task->suid &&
             current->euid != task->uid &&
             current->euid != task->suid)
         return _EPERM;
+    send_signal(task, sig, info);
+    return 0;
+}
+
+static int kill_task(struct task *task, dword_t sig) {
     struct siginfo_ info = {
         .code = SI_USER_,
         .kill.pid = current->pid,
         .kill.uid = current->uid,
     };
-    send_signal(task, sig, info);
-    return 0;
+    return kill_task_info(task, sig, info);
 }
 
 static int kill_group(pid_t_ pgid, dword_t sig) {
@@ -964,4 +1012,40 @@ dword_t sys_tkill(pid_t_ tid, dword_t sig) {
     if (tid <= 0)
         return _EINVAL;
     return do_kill(tid, sig, 0);
+}
+
+static int do_rt_sigqueueinfo(pid_t_ tid, pid_t_ tgid, dword_t sig, struct siginfo_ info) {
+    if (sig >= NUM_SIGS || tid <= 0)
+        return _EINVAL;
+    if (info.sig != 0 && info.sig != (int_t) sig)
+        return _EINVAL;
+    info.sig = sig;
+
+    lock(&pids_lock);
+    struct task *task = pid_get_task(tid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    if (tgid != 0 && task->tgid != tgid) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    int err = kill_task_info(task, sig, info);
+    unlock(&pids_lock);
+    return err;
+}
+
+dword_t sys_rt_sigqueueinfo(pid_t_ pid, dword_t sig, addr_t info_addr) {
+    struct rv_siginfo_ user_info;
+    if (user_get(info_addr, user_info))
+        return _EFAULT;
+    return do_rt_sigqueueinfo(pid, 0, sig, siginfo_from_rv_siginfo(user_info));
+}
+
+dword_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, dword_t sig, addr_t info_addr) {
+    struct rv_siginfo_ user_info;
+    if (user_get(info_addr, user_info))
+        return _EFAULT;
+    return do_rt_sigqueueinfo(tid, tgid, sig, siginfo_from_rv_siginfo(user_info));
 }

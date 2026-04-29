@@ -16,6 +16,7 @@
 #include "fs/fd.h"
 #include "kernel/elf.h"
 #include "kernel/vdso.h"
+#include "fs/path.h"
 #include "tools/ptraceomatic-config.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
@@ -600,28 +601,19 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     return err;
 }
 
-int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
-    struct fd *fd = generic_open(file, O_RDONLY, 0);
-    if (IS_ERR(fd))
-        return PTR_ERR(fd);
-
+static int exec_fd(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
     struct statbuf stat;
     int err = fd->mount->fs->fstat(fd, &stat);
-    if (err < 0) {
-        fd_close(fd);
+    if (err < 0)
         return err;
-    }
 
     // if nobody has permission to execute, it should be safe to not execute
-    if (!(stat.mode & 0111)) {
-        fd_close(fd);
+    if (!(stat.mode & 0111))
         return _EACCES;
-    }
 
     err = format_exec(fd, file, argv, envp);
     if (err == _ENOEXEC)
         err = shebang_exec(fd, file, argv, envp);
-    fd_close(fd);
     if (err < 0)
         return err;
 
@@ -686,6 +678,16 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     return 0;
 }
 
+int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
+    struct fd *fd = generic_open(file, O_RDONLY_, 0);
+    if (IS_ERR(fd))
+        return PTR_ERR(fd);
+
+    int err = exec_fd(fd, file, argv, envp);
+    fd_close(fd);
+    return err;
+}
+
 int do_execve(const char *file, size_t argc, const char *argv_p, const char *envp_p) {
     struct exec_args argv = {.count = argc, .args = argv_p};
     struct exec_args envp = {.args = envp_p};
@@ -725,10 +727,6 @@ static ssize_t user_read_string_array(addr_t addr, char *buf, size_t max) {
 }
 
 dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
-    char filename[MAX_PATH];
-    if (user_read_string(filename_addr, filename, sizeof(filename)))
-        return _EFAULT;
-
     int err = _ENOMEM;
     char *argv = malloc(ARGV_MAX);
     if (argv == NULL)
@@ -752,6 +750,12 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
         envp[0] = envp[1] = '\0';
     }
 
+    char filename[MAX_PATH];
+    if (user_read_string(filename_addr, filename, sizeof(filename))) {
+        err = _EFAULT;
+        goto err_free_envp;
+    }
+
     STRACE("execve(\"%.1000s\", {", filename);
     const char *args = argv;
     while (*args != '\0') {
@@ -767,6 +771,99 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     STRACE("})");
 
     err = do_execve(filename, argc, argv, envp);
+
+err_free_envp:
+    free(envp);
+err_free_argv:
+    free(argv);
+    return err;
+}
+
+static struct fd *exec_at_fd(fd_t f) {
+    if (f == AT_FDCWD_)
+        return AT_PWD;
+    return f_get(f);
+}
+
+dword_t sys_execveat(fd_t at_f, addr_t filename_addr, addr_t argv_addr, addr_t envp_addr, dword_t flags) {
+    if (flags & ~(AT_EMPTY_PATH_ | AT_SYMLINK_NOFOLLOW_))
+        return _EINVAL;
+
+    int err = _ENOMEM;
+    char *argv = malloc(ARGV_MAX);
+    if (argv == NULL)
+        goto err_free_argv;
+    ssize_t argc = user_read_string_array(argv_addr, argv, ARGV_MAX);
+    if (argc < 0) {
+        err = argc;
+        goto err_free_argv;
+    }
+
+    char *envp = malloc(ARGV_MAX);
+    if (envp == NULL)
+        goto err_free_envp;
+    if (envp_addr != 0) {
+        err = user_read_string_array(envp_addr, envp, ARGV_MAX);
+        if (err < 0)
+            goto err_free_envp;
+    } else {
+        envp[0] = envp[1] = '\0';
+    }
+
+    char filename[MAX_PATH];
+    if (user_read_string(filename_addr, filename, sizeof(filename))) {
+        err = _EFAULT;
+        goto err_free_envp;
+    }
+
+    STRACE("execveat(%d, \"%.1000s\", argv, envp, %#x)", at_f, filename, flags);
+    struct exec_args argv_args = {.count = argc, .args = argv};
+    struct exec_args envp_args = {.args = envp};
+    const char *envp_p = envp;
+    while (*envp_p != '\0') {
+        envp_p += strlen(envp_p) + 1;
+        envp_args.count++;
+    }
+
+    struct fd *at = exec_at_fd(at_f);
+    if (at == NULL) {
+        err = _EBADF;
+        goto err_free_envp;
+    }
+
+    if (filename[0] == '\0' && (flags & AT_EMPTY_PATH_)) {
+        if (at == AT_PWD) {
+            err = _ENOENT;
+            goto err_free_envp;
+        }
+        fd_retain(at);
+        char display[MAX_PATH];
+        err = generic_getpath(at, display);
+        if (err < 0)
+            snprintf(display, sizeof(display), "/dev/fd/%d", at_f);
+        err = exec_fd(at, display, argv_args, envp_args);
+        fd_close(at);
+        goto err_free_envp;
+    }
+
+    dword_t open_flags = O_RDONLY_;
+    int normalize_flags = N_SYMLINK_FOLLOW;
+    if (flags & AT_SYMLINK_NOFOLLOW_) {
+        open_flags |= O_NOFOLLOW_;
+        normalize_flags = N_SYMLINK_NOFOLLOW;
+    }
+    char display[MAX_PATH];
+    err = path_normalize(at, filename, display, normalize_flags);
+    if (err < 0)
+        goto err_free_envp;
+
+    struct fd *fd = generic_openat(at, filename, open_flags, 0);
+    if (IS_ERR(fd)) {
+        err = PTR_ERR(fd);
+        goto err_free_envp;
+    }
+    err = exec_fd(fd, display, argv_args, envp_args);
+    fd_close(fd);
 
 err_free_envp:
     free(envp);

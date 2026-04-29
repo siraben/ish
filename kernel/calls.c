@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include "debug.h"
 #include "kernel/calls.h"
@@ -5,6 +7,8 @@
 #include "kernel/memory.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "fs/proc.h"
+#include "util/timer.h"
 
 dword_t syscall_stub(void) {
     return _ENOSYS;
@@ -20,6 +24,12 @@ dword_t syscall_success_stub(void) {
 }
 
 #if GUEST_RISCV64
+#define RV_SYSCALL_SLOTS 472
+static atomic_ulong rv_unsupported_syscalls[RV_SYSCALL_SLOTS];
+static atomic_ulong rv_illegal_instruction_count;
+static atomic_ullong rv_last_illegal_pc;
+static atomic_uint rv_last_illegal_opcode;
+
 static sqword_t rv_ret32(dword_t value) {
     return (sqword_t) (int32_t) value;
 }
@@ -162,18 +172,56 @@ static sqword_t rv_sys_futex_waitv(qword_t waiters_addr, qword_t nr_futexes,
         qword_t flags, qword_t timeout_addr, qword_t clockid, qword_t UNUSED(a5)) {
     if (flags != 0 || nr_futexes == 0)
         return _EINVAL;
-    if (nr_futexes != 1)
-        return _ENOSYS;
-    struct rv_futex_waitv_ waiter;
-    if (user_get(waiters_addr, waiter))
-        return _EFAULT;
-    if (waiter.reserved != 0 || !rv_futex2_flags_supported(waiter.flags))
+    if (nr_futexes > 128)
         return _EINVAL;
     if (clockid != CLOCK_MONOTONIC_ && clockid != CLOCK_REALTIME_)
         return _EINVAL;
-    dword_t err = sys_futex((addr_t) waiter.uaddr, 0 | 128, (dword_t) waiter.val,
-            (addr_t) timeout_addr, 0, 0);
-    return err == 0 ? 0 : rv_ret32(err);
+
+    struct rv_futex_waitv_ *rv_waiters = malloc(sizeof(*rv_waiters) * nr_futexes);
+    struct futex_waiter_ *waiters = malloc(sizeof(*waiters) * nr_futexes);
+    if (rv_waiters == NULL || waiters == NULL) {
+        free(rv_waiters);
+        free(waiters);
+        return _ENOMEM;
+    }
+    if (user_read(waiters_addr, rv_waiters, sizeof(*rv_waiters) * nr_futexes)) {
+        free(rv_waiters);
+        free(waiters);
+        return _EFAULT;
+    }
+    for (qword_t i = 0; i < nr_futexes; i++) {
+        if (rv_waiters[i].reserved != 0 || !rv_futex2_flags_supported(rv_waiters[i].flags)) {
+            free(rv_waiters);
+            free(waiters);
+            return _EINVAL;
+        }
+        waiters[i].uaddr = (addr_t) rv_waiters[i].uaddr;
+        waiters[i].val = (dword_t) rv_waiters[i].val;
+    }
+    free(rv_waiters);
+
+    struct timespec timeout;
+    struct timespec *timeout_ptr = NULL;
+    if (timeout_addr != 0) {
+        struct timespec_ timeout_;
+        if (user_get(timeout_addr, timeout_)) {
+            free(waiters);
+            return _EFAULT;
+        }
+        if (timeout_.sec < 0 || timeout_.nsec < 0 || timeout_.nsec >= 1000000000) {
+            free(waiters);
+            return _EINVAL;
+        }
+        clockid_t host_clock = clockid == CLOCK_REALTIME_ ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+        timeout = timespec_subtract(convert_timespec(timeout_), timespec_now(host_clock));
+        if (!timespec_positive(timeout))
+            timeout = (struct timespec) {};
+        timeout_ptr = &timeout;
+    }
+
+    int_t err = sys_futex_wait_multiple(waiters, (dword_t) nr_futexes, timeout_ptr);
+    free(waiters);
+    return rv_ret32(err);
 }
 
 static sqword_t rv_sys_futex_requeue(qword_t waiters_addr, qword_t flags,
@@ -239,6 +287,7 @@ static sqword_t rv_sys_futex_requeue(qword_t waiters_addr, qword_t flags,
 
 RV_WRAP2(sys_getcwd, addr_t, dword_t)
 RV_WRAP2(sys_eventfd2, uint_t, int_t)
+RV_WRAP2(sys_memfd_create, addr_t, dword_t)
 RV_WRAP1(sys_epoll_create, int_t)
 RV_WRAP4(sys_epoll_ctl, fd_t, int_t, fd_t, addr_t)
 RV_WRAP6(sys_epoll_pwait, fd_t, addr_t, int_t, int_t, addr_t, dword_t)
@@ -302,6 +351,7 @@ RV_WRAP1(sys_exit, dword_t)
 RV_WRAP1(sys_exit_group, dword_t)
 RV_WRAP4(sys_waitid, int_t, pid_t_, addr_t, int_t)
 RV_WRAP1(sys_set_tid_address, addr_t)
+RV_WRAP5(sys_execveat, fd_t, addr_t, addr_t, addr_t, dword_t)
 RV_WRAP6(sys_futex, addr_t, dword_t, dword_t, addr_t, addr_t, dword_t)
 RV_WRAP2(sys_set_robust_list, addr_t, dword_t)
 RV_WRAP3(sys_get_robust_list, pid_t_, addr_t, addr_t)
@@ -331,6 +381,7 @@ RV_WRAP1(sys_sched_get_priority_max, int_t)
 RV_WRAP2(sys_kill, pid_t_, dword_t)
 RV_WRAP2(sys_tkill, pid_t_, dword_t)
 RV_WRAP3(sys_tgkill, pid_t_, pid_t_, dword_t)
+RV_WRAP4(sys_rt_tgsigqueueinfo, pid_t_, pid_t_, dword_t, addr_t)
 RV_WRAP2(sys_sigaltstack, addr_t, addr_t)
 RV_WRAP2(sys_rt_sigsuspend, addr_t, uint_t)
 RV_WRAP4(sys_rt_sigaction, dword_t, addr_t, addr_t, dword_t)
@@ -338,6 +389,7 @@ RV_WRAP4(sys_rt_sigprocmask, dword_t, addr_t, addr_t, dword_t)
 RV_WRAP1(sys_rt_sigpending, addr_t)
 RV_WRAP4(sys_rt_sigtimedwait, addr_t, addr_t, addr_t, uint_t)
 RV_WRAP0(sys_rt_sigreturn)
+RV_WRAP3(sys_rt_sigqueueinfo, pid_t_, dword_t, addr_t)
 RV_WRAP3(sys_setpriority, int_t, pid_t_, int_t)
 RV_WRAP2(sys_getpriority, int_t, pid_t_)
 RV_WRAP3(sys_reboot, int_t, int_t, int_t)
@@ -546,7 +598,7 @@ syscall_t syscall_table[] = {
     [135] = rv_sys_rt_sigprocmask,
     [136] = rv_sys_rt_sigpending,
     [137] = rv_sys_rt_sigtimedwait,
-    [138] = rv_stub, // queued realtime signal payload delivery incomplete.
+    [138] = rv_sys_rt_sigqueueinfo,
     [139] = rv_sys_rt_sigreturn,
     [140] = rv_sys_setpriority,
     [141] = rv_sys_getpriority,
@@ -627,7 +679,7 @@ syscall_t syscall_table[] = {
     [234] = rv_stub, // remap_file_pages is obsolete and unsupported.
     [235] = rv_sys_mbind,
     [236 ... 239] = rv_stub, // NUMA policy/page migration not modeled.
-    [240] = rv_stub, // queued realtime signal payload delivery incomplete.
+    [240] = rv_sys_rt_tgsigqueueinfo,
     [241] = rv_stub, // perf_event_open needs host perf virtualization.
     [242] = rv_sys_accept4,
     [243] = rv_sys_recvmmsg,
@@ -649,9 +701,9 @@ syscall_t syscall_table[] = {
     [276] = rv_sys_renameat2,
     [277] = rv_sys_seccomp,
     [278] = rv_sys_getrandom,
-    [279] = rv_stub, // memfd requires anonymous file object support.
+    [279] = rv_sys_memfd_create,
     [280] = rv_stub, // BPF VM/program registry not modeled.
-    [281] = rv_stub, // execveat can be added on top of path-at resolution.
+    [281] = rv_sys_execveat,
     [282] = rv_stub, // userfaultfd requires fault delegation.
     [283] = rv_success_stub,
     [284] = rv_success_stub, // mlock2 is advisory here.
@@ -696,6 +748,24 @@ syscall_t syscall_table[] = {
 
 void dump_stack(int lines);
 
+#if GUEST_RISCV64
+void sys_compat_show(struct proc_data *buf) {
+    proc_printf(buf, "illegal_instruction count=%lu last_pc=0x%llx last_opcode=0x%x\n",
+            atomic_load(&rv_illegal_instruction_count),
+            (unsigned long long) atomic_load(&rv_last_illegal_pc),
+            atomic_load(&rv_last_illegal_opcode));
+    for (unsigned i = 0; i < RV_SYSCALL_SLOTS; i++) {
+        unsigned long count = atomic_load(&rv_unsupported_syscalls[i]);
+        if (count != 0)
+            proc_printf(buf, "unsupported_syscall nr=%u count=%lu\n", i, count);
+    }
+}
+#else
+void sys_compat_show(struct proc_data *buf) {
+    proc_printf(buf, "compat telemetry is only available on riscv64\n");
+}
+#endif
+
 void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
     if (interrupt == INT_SYSCALL) {
@@ -707,6 +777,8 @@ void handle_interrupt(int interrupt) {
         if (syscall_num >= NUM_SYSCALLS || syscall_table[syscall_num] == NULL) {
             printk("%d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
 #if GUEST_RISCV64
+            if (syscall_num < RV_SYSCALL_SLOTS)
+                atomic_fetch_add(&rv_unsupported_syscalls[syscall_num], 1);
             cpu->a0 = (uint64_t) (int64_t) _ENOSYS;
 #else
             cpu->eax = _ENOSYS;
@@ -714,6 +786,7 @@ void handle_interrupt(int interrupt) {
         } else {
 #if GUEST_RISCV64
             if (syscall_table[syscall_num] == rv_stub) {
+                atomic_fetch_add(&rv_unsupported_syscalls[syscall_num], 1);
 #else
             if (syscall_table[syscall_num] == (syscall_t) syscall_stub) {
 #endif
@@ -751,6 +824,11 @@ void handle_interrupt(int interrupt) {
         }
     } else if (interrupt == INT_UNDEFINED) {
 #if GUEST_RISCV64
+        atomic_fetch_add(&rv_illegal_instruction_count, 1);
+        atomic_store(&rv_last_illegal_pc, cpu->eip);
+        dword_t opcode = 0;
+        (void) user_get(cpu->eip, opcode);
+        atomic_store(&rv_last_illegal_opcode, opcode);
         printk("%d illegal instruction at 0x%llx: ", current->pid, (unsigned long long) cpu->eip);
 #else
         printk("%d illegal instruction at 0x%x: ", current->pid, cpu->eip);
