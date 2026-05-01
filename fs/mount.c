@@ -11,6 +11,7 @@ static const struct fs_ops *filesystems[MAX_FILESYSTEMS] = {
     &procfs,
     &devptsfs,
     &tmpfs,
+    &devtmpfs,
 };
 
 void fs_register(const struct fs_ops *fs) {

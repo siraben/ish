@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "kernel/calls.h"
-#include "kernel/init.h"
 #include "kernel/task.h"
 #include "xX_main_Xx.h"
 
@@ -14,7 +13,11 @@ int main(int argc, char *const argv[]) {
         fprintf(stderr, "xX_main_Xx: %s\n", strerror(-err));
         return err;
     }
-    create_some_device_nodes();
+    err = do_mount(&devtmpfs, "devtmpfs", "/dev", "", 0);
+    if (err < 0) {
+        fprintf(stderr, "mount devtmpfs: %s\n", strerror(-err));
+        return err;
+    }
     do_mount(&procfs, "proc", "/proc", "", 0);
     do_mount(&devptsfs, "devpts", "/dev/pts", "", 0);
     task_run_current();

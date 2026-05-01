@@ -174,6 +174,7 @@ extern const struct fs_ops procfs;
 extern const struct fs_ops fakefs;
 extern const struct fs_ops devptsfs;
 extern const struct fs_ops tmpfs;
+extern const struct fs_ops devtmpfs;
 void fs_register(const struct fs_ops *fs);
 
 #endif

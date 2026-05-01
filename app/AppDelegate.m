@@ -82,14 +82,16 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     fs_register(&iosfs);
     fs_register(&iosfs_unsafe);
 
-    // need to do this first so that we can have a valid current for the generic_mknod calls
+    // need to do this first so that we can have a valid current for the devtmpfs mount
     err = become_first_process();
     if (err < 0)
         return err;
 
     FsInitialize();
 
-    create_some_device_nodes();
+    err = do_mount(&devtmpfs, "devtmpfs", "/dev", "", 0);
+    if (err < 0)
+        return err;
     
     // Permissions on / have been broken for a while, let's fix them
     generic_setattrat(AT_PWD, "/", (struct attr) {.type = attr_mode, .mode = 0755}, false);

@@ -4,6 +4,8 @@
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "fs/path.h"
+#include "fs/dev.h"
+#include "fs/devices.h"
 #include "util/refcount.h"
 #include "debug.h"
 
@@ -349,6 +351,91 @@ out:
     return err;
 }
 
+static int tmpfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ dev) {
+    const char *filename;
+    struct tmp_dirent *parent = tmpfs_lookup_parent(mount, path, &filename);
+    if (IS_ERR(parent))
+        return PTR_ERR(parent);
+    lock(&parent->lock);
+
+    int err = tmpfs_dir_lookup_existence(parent, filename);
+    if (err < 0)
+        goto out;
+
+    struct tmp_inode *inode = tmp_inode_new(mode);
+    err = _ENOMEM;
+    if (inode == NULL)
+        goto out;
+
+    inode->stat.rdev = dev;
+    err = tmpfs_dir_link(parent, filename, inode, NULL);
+    tmp_inode_release(inode);
+out:
+    unlock(&parent->lock);
+    tmp_dirent_release(parent);
+    return err;
+}
+
+static int devtmpfs_mknod(struct mount *mount, const char *path, int major, int minor) {
+    return tmpfs_mknod(mount, path, S_IFCHR|0666, dev_make(major, minor));
+}
+
+static int devtmpfs_mount(struct mount *mount) {
+    int err = tmpfs_mount(mount);
+    if (err < 0)
+        return err;
+
+    err = devtmpfs_mknod(mount, "/tty1", TTY_CONSOLE_MAJOR, 1);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty2", TTY_CONSOLE_MAJOR, 2);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty3", TTY_CONSOLE_MAJOR, 3);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty4", TTY_CONSOLE_MAJOR, 4);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty5", TTY_CONSOLE_MAJOR, 5);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty6", TTY_CONSOLE_MAJOR, 6);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/tty7", TTY_CONSOLE_MAJOR, 7);
+    if (err < 0)
+        return err;
+
+    err = devtmpfs_mknod(mount, "/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/console", TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
+    if (err < 0)
+        return err;
+
+    err = devtmpfs_mknod(mount, "/null", MEM_MAJOR, DEV_NULL_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/zero", MEM_MAJOR, DEV_ZERO_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/full", MEM_MAJOR, DEV_FULL_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/random", MEM_MAJOR, DEV_RANDOM_MINOR);
+    if (err < 0)
+        return err;
+    err = devtmpfs_mknod(mount, "/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
+    if (err < 0)
+        return err;
+
+    return tmpfs_mkdir(mount, "/pts", 0755);
+}
+
 // ========================
 // ======== FD OPS ========
 // ========================
@@ -503,6 +590,20 @@ const struct fs_ops tmpfs = {
     .fstat = tmpfs_fstat,
     .getpath = tmpfs_getpath,
     .mkdir = tmpfs_mkdir,
+    .mknod = tmpfs_mknod,
+};
+
+const struct fs_ops devtmpfs = {
+    .name = "devtmpfs", .magic = 0x01021994,
+    .mount = devtmpfs_mount,
+    .umount = tmpfs_umount,
+    .open = tmpfs_open,
+    .close = tmpfs_close,
+    .stat = tmpfs_stat,
+    .fstat = tmpfs_fstat,
+    .getpath = tmpfs_getpath,
+    .mkdir = tmpfs_mkdir,
+    .mknod = tmpfs_mknod,
 };
 
 const struct fd_ops tmpfs_fdops = {
