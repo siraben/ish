@@ -38,6 +38,8 @@ libdl = cc.find_library('dl', required: false)
 sqlite3 = cc.find_library('sqlite3')
 dependencies = [librt, libm, libdl, threads, sqlite3]
 
+subdir('deps')
+
 emu_src = [
     'emu/tlb.c',
     'emu_riscv/atomic.c',

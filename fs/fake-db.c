@@ -51,22 +51,14 @@ void db_begin_write(struct fakefs_db *fs) {
 }
 void db_commit(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.commit);
-    if (fs->in_write_transaction) {
-        fs->cache_generation++;
-        if (fs->cache_generation == 0)
-            fs->cache_generation = 1;
-        fs->in_write_transaction = false;
-    }
+    fs->in_write_transaction = false;
     sqlite3_mutex_leave(fs->lock);
 }
 void db_rollback(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.rollback);
-    if (fs->in_write_transaction) {
-        fs->cache_generation++;
-        if (fs->cache_generation == 0)
-            fs->cache_generation = 1;
-        fs->in_write_transaction = false;
-    }
+    if (fs->in_write_transaction)
+        stat_cache_clear(fs);
+    fs->in_write_transaction = false;
     sqlite3_mutex_leave(fs->lock);
 }
 
@@ -97,9 +89,16 @@ static struct fakefs_stat_cache_entry *stat_cache_entry(struct fakefs_db *fs, co
 
 static struct fakefs_stat_cache_entry *stat_cache_lookup_entry(struct fakefs_db *fs, const char *path) {
     struct fakefs_stat_cache_entry *entry = stat_cache_entry(fs, path);
-    if (entry->generation != fs->cache_generation || entry->path == NULL || strcmp(entry->path, path) != 0)
+    if (entry->path == NULL || strcmp(entry->path, path) != 0)
         return NULL;
     return entry;
+}
+
+void stat_cache_clear(struct fakefs_db *fs) {
+    for (unsigned i = 0; i < FAKEFS_STAT_CACHE_SIZE; i++) {
+        free(fs->stat_cache[i].path);
+        fs->stat_cache[i].path = NULL;
+    }
 }
 
 static bool stat_cache_lookup_inode(struct fakefs_db *fs, const char *path, inode_t *inode) {
@@ -144,7 +143,6 @@ static void stat_cache_store(struct fakefs_db *fs, const char *path, inode_t ino
     } else {
         entry->has_stat = false;
     }
-    entry->generation = fs->cache_generation;
 }
 
 static void stat_cache_store_negative(struct fakefs_db *fs, const char *path) {
@@ -159,7 +157,6 @@ static void stat_cache_store_negative(struct fakefs_db *fs, const char *path) {
     entry->inode = 0;
     entry->has_stat = false;
     entry->exists = false;
-    entry->generation = fs->cache_generation;
 }
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path) {
@@ -253,6 +250,7 @@ void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat
     fs->cache_generation++;
     if (fs->cache_generation == 0)
         fs->cache_generation = 1;
+    stat_cache_clear(fs);
 }
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst) {
@@ -263,6 +261,7 @@ void path_link(struct fakefs_db *fs, const char *src, const char *dst) {
     bind_path(fs->stmt.path_link, 1, dst);
     sqlite3_bind_int64(fs->stmt.path_link, 2, inode);
     db_exec_reset(fs, fs->stmt.path_link);
+    stat_cache_store(fs, dst, inode, NULL);
 }
 inode_t path_unlink(struct fakefs_db *fs, const char *path) {
     inode_t inode = path_get_inode(fs, path);
@@ -271,6 +270,7 @@ inode_t path_unlink(struct fakefs_db *fs, const char *path) {
     // delete from paths where path = ?
     bind_path(fs->stmt.path_unlink, 1, path);
     db_exec_reset(fs, fs->stmt.path_unlink);
+    stat_cache_store_negative(fs, path);
     return inode;
 }
 void path_rename(struct fakefs_db *fs, const char *src, const char *dst) {
@@ -293,6 +293,7 @@ void path_rename(struct fakefs_db *fs, const char *src, const char *dst) {
     sqlite3_bind_blob(fs->stmt.path_rename, 4, src_extra, src_len + 1, SQLITE_TRANSIENT);
     sqlite3_bind_blob(fs->stmt.path_rename, 5, src_extra, src_len, SQLITE_TRANSIENT);
     db_exec_reset(fs, fs->stmt.path_rename);
+    stat_cache_clear(fs);
 }
 
 #if DEBUG_sql
@@ -412,10 +413,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
 
 int fake_db_deinit(struct fakefs_db *fs) {
     if (fs->db) {
-        for (unsigned i = 0; i < FAKEFS_STAT_CACHE_SIZE; i++) {
-            free(fs->stat_cache[i].path);
-            fs->stat_cache[i].path = NULL;
-        }
+        stat_cache_clear(fs);
         sqlite3_finalize(fs->stmt.begin_deferred);
         sqlite3_finalize(fs->stmt.begin_immediate);
         sqlite3_finalize(fs->stmt.commit);

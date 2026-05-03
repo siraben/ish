@@ -381,6 +381,56 @@ static ssize_t sys_writev_direct(struct fd *fd, struct iovec_ *guest_iov, unsign
     return res;
 }
 
+static ssize_t sys_pread_direct(struct fd *fd, addr_t buf_addr, size_t size, off_t off) {
+    if (!S_ISREG(fd->type) || fd->ops->preadv == NULL || size < DIRECT_IO_MIN_SIZE || off < 0)
+        return _ENOSYS;
+
+    ssize_t total = 0;
+    while ((size_t) total < size) {
+        struct iovec iov[DIRECT_IOV_MAX];
+        int iovcnt = 0;
+        read_wrlock(&current->mem->lock);
+        int err = build_user_iov(buf_addr + total, size - total, MEM_WRITE, iov, &iovcnt);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return total != 0 ? total : err;
+        }
+        ssize_t res = fd->ops->preadv(fd, iov, iovcnt, off + total);
+        read_wrunlock(&current->mem->lock);
+        if (res <= 0)
+            return total != 0 ? total : res;
+        total += res;
+        if (iovcnt == 1 || res < (ssize_t) iov[0].iov_len)
+            break;
+    }
+    return total;
+}
+
+static ssize_t sys_pwrite_direct(struct fd *fd, addr_t buf_addr, size_t size, off_t off) {
+    if (!S_ISREG(fd->type) || fd->ops->pwritev == NULL || size < DIRECT_IO_MIN_SIZE || off < 0)
+        return _ENOSYS;
+
+    ssize_t total = 0;
+    while ((size_t) total < size) {
+        struct iovec iov[DIRECT_IOV_MAX];
+        int iovcnt = 0;
+        read_wrlock(&current->mem->lock);
+        int err = build_user_iov(buf_addr + total, size - total, MEM_READ, iov, &iovcnt);
+        if (err < 0) {
+            read_wrunlock(&current->mem->lock);
+            return total != 0 ? total : err;
+        }
+        ssize_t res = fd->ops->pwritev(fd, iov, iovcnt, off + total);
+        read_wrunlock(&current->mem->lock);
+        if (res <= 0)
+            return total != 0 ? total : res;
+        total += res;
+        if (iovcnt == 1 || res < (ssize_t) iov[0].iov_len)
+            break;
+    }
+    return total;
+}
+
 static ssize_t sys_read_fd(struct fd *fd, void *buf, size_t size) {
     if (S_ISDIR(fd->type))
         return _EISDIR;
@@ -651,6 +701,10 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    ssize_t direct_res = sys_pread_direct(fd, buf_addr, size, off);
+    if (direct_res != _ENOSYS)
+        return direct_res;
+
     char *buf = syscall_io_buffer;
     if (size > SYSCALL_IO_BUFFER_SIZE)
         buf = malloc(size);
@@ -692,6 +746,10 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    ssize_t direct_res = sys_pwrite_direct(fd, buf_addr, size, off);
+    if (direct_res != _ENOSYS)
+        return direct_res;
+
     char *buf = syscall_io_buffer;
     if (size > SYSCALL_IO_BUFFER_SIZE)
         buf = malloc(size);

@@ -15,13 +15,12 @@ struct ish_stat {
 typedef uint64_t inode_t;
 
 #ifndef FAKEFS_STAT_CACHE_SIZE
-#define FAKEFS_STAT_CACHE_SIZE 2048
+#define FAKEFS_STAT_CACHE_SIZE 32768
 #endif
 struct fakefs_stat_cache_entry {
     char *path;
     inode_t inode;
     struct ish_stat stat;
-    uint64_t generation;
     bool has_stat;
     bool exists;
 };
@@ -62,6 +61,7 @@ void db_rollback(struct fakefs_db *fs);
 bool db_exec(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
 void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt);
+void stat_cache_clear(struct fakefs_db *fs);
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);

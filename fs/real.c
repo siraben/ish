@@ -181,6 +181,20 @@ ssize_t realfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off)
     return res;
 }
 
+ssize_t realfs_preadv(struct fd *fd, const struct iovec *iov, int iovcnt, off_t off) {
+    ssize_t res = preadv(fd->real_fd, iov, iovcnt, off);
+    if (res < 0)
+        return errno_map();
+    return res;
+}
+
+ssize_t realfs_pwritev(struct fd *fd, const struct iovec *iov, int iovcnt, off_t off) {
+    ssize_t res = pwritev(fd->real_fd, iov, iovcnt, off);
+    if (res < 0)
+        return errno_map();
+    return res;
+}
+
 void realfs_opendir(struct fd *fd) {
     if (fd->dir == NULL) {
         int dirfd = dup(fd->real_fd);
@@ -549,6 +563,8 @@ const struct fd_ops realfs_fdops = {
     .writev = realfs_writev,
     .pread = realfs_pread,
     .pwrite = realfs_pwrite,
+    .preadv = realfs_preadv,
+    .pwritev = realfs_pwritev,
     .readdir = realfs_readdir,
     .telldir = realfs_telldir,
     .seekdir = realfs_seekdir,

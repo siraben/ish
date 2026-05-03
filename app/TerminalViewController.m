@@ -514,7 +514,7 @@
 - (void)setTerminal:(Terminal *)terminal {
     _terminal = terminal;
     self.termView.terminal = self.terminal;
-    (void) self.terminal.webView;
+    (void) self.terminal.displayView;
 }
 
 - (void)setSessionTerminal:(Terminal *)sessionTerminal {

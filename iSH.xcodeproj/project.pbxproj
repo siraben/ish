@@ -120,6 +120,7 @@
 		BB28C79526896B1F00BDC834 /* TerminalViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB792B571F96D90D00FFB7A4 /* TerminalViewController.m */; };
 		BB28C79626896B1F00BDC834 /* ProgressReportViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBAEE33B249BDADC0069EBB5 /* ProgressReportViewController.m */; };
 		BB28C79726896B1F00BDC834 /* TerminalView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB78AB2A1FAD22440013E782 /* TerminalView.m */; };
+		49C0D0122D2F000100000002 /* GhosttyTerminalDisplay.m in Sources */ = {isa = PBXBuildFile; fileRef = 49C0D0112D2F000100000001 /* GhosttyTerminalDisplay.m */; };
 		BB28C79826896B1F00BDC834 /* ScrollbarView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB23F58C231E1D1400585522 /* ScrollbarView.m */; };
 		BB28C79926896B1F00BDC834 /* DelayedUITask.m in Sources */ = {isa = PBXBuildFile; fileRef = BB455E101FB37F6600AFB48B /* DelayedUITask.m */; };
 		BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */ = {isa = PBXBuildFile; fileRef = BB0FC5911F980A6B00803272 /* Terminal.m */; };
@@ -214,6 +215,8 @@
 		BBEF1976268066D1001225BD /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBAEE338249B58E80069EBB5 /* libbz2.tbd */; };
 		BBEF1977268066D1001225BD /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BB6DB260216435330047A611 /* libiconv.tbd */; };
 		BBEF1978268066D1001225BD /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB55652158644C00DFE6DE /* libresolv.tbd */; };
+		49C0D0212D2F000100000004 /* ghostty-vt.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 49C0D0202D2F000100000003 /* ghostty-vt.xcframework */; };
+		49C0D0222D2F000100000005 /* ghostty-vt.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 49C0D0202D2F000100000003 /* ghostty-vt.xcframework */; };
 		BBEF197D268066D1001225BD /* 3d.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A923124EDA560002F5A96 /* 3d.png */; };
 		BBEF197E268066D1001225BD /* colontildehash.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A922F24EDA55C002F5A96 /* colontildehash.png */; };
 		BBEF197F268066D1001225BD /* metal.png in Resources */ = {isa = PBXBuildFile; fileRef = BBC8298624EE5853009D042C /* metal.png */; };
@@ -616,6 +619,8 @@
 		BB0F553523A0ACFC0032A2A1 /* pydann2.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = pydann2.png; sourceTree = "<group>"; };
 		BB0FC5901F980A6B00803272 /* Terminal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Terminal.h; sourceTree = "<group>"; };
 		BB0FC5911F980A6B00803272 /* Terminal.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Terminal.m; sourceTree = "<group>"; };
+		49C0D0102D2F000100000000 /* GhosttyTerminalDisplay.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GhosttyTerminalDisplay.h; sourceTree = "<group>"; };
+		49C0D0112D2F000100000001 /* GhosttyTerminalDisplay.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GhosttyTerminalDisplay.m; sourceTree = "<group>"; };
 		BB101B362364CF57000A93BC /* FontPickerViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FontPickerViewController.h; sourceTree = "<group>"; };
 		BB101B372364CF57000A93BC /* FontPickerViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FontPickerViewController.m; sourceTree = "<group>"; };
 		BB10E0C1248DA5B0009C7A74 /* libarchive.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = libarchive.xcodeproj; path = ../deps/libarchive.xcodeproj; sourceTree = "<group>"; };
@@ -648,6 +653,7 @@
 		BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectReleaseLinux.xcconfig; sourceTree = "<group>"; };
 		BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectDebugLinux.xcconfig; sourceTree = "<group>"; };
 		BB28C755268956C900BDC834 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		49C0D0202D2F000100000003 /* ghostty-vt.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "ghostty-vt.xcframework"; path = "deps/ghostty/ghostty-vt.xcframework"; sourceTree = SOURCE_ROOT; };
 		BB2B4DAB231D94C300CB578B /* hterm_all.js */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.javascript; name = hterm_all.js; path = ../../deps/libapps/hterm/dist/js/hterm_all.js; sourceTree = "<group>"; };
 		BB38597627BCEC70000A1082 /* circular.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = circular.png; sourceTree = "<group>"; };
 		BB38597927BCEC78000A1082 /* dollarblock1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dollarblock1.png; sourceTree = "<group>"; };
@@ -783,6 +789,7 @@
 				BBAEE339249B58E80069EBB5 /* libbz2.tbd in Frameworks */,
 				BB6DB261216435340047A611 /* libiconv.tbd in Frameworks */,
 				BBFB55662158644C00DFE6DE /* libresolv.tbd in Frameworks */,
+				49C0D0212D2F000100000004 /* ghostty-vt.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -811,6 +818,7 @@
 				BBEF1976268066D1001225BD /* libbz2.tbd in Frameworks */,
 				BBEF1977268066D1001225BD /* libiconv.tbd in Frameworks */,
 				BBEF1978268066D1001225BD /* libresolv.tbd in Frameworks */,
+				49C0D0222D2F000100000005 /* ghostty-vt.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1061,6 +1069,8 @@
 				BB78AB2A1FAD22440013E782 /* TerminalView.m */,
 				BB0FC5901F980A6B00803272 /* Terminal.h */,
 				BB0FC5911F980A6B00803272 /* Terminal.m */,
+				49C0D0102D2F000100000000 /* GhosttyTerminalDisplay.h */,
+				49C0D0112D2F000100000001 /* GhosttyTerminalDisplay.m */,
 				BB23F58B231E1D1400585522 /* ScrollbarView.h */,
 				BB23F58C231E1D1400585522 /* ScrollbarView.m */,
 				BBECF39C2691312500DEC937 /* LinuxInterop */,
@@ -1087,6 +1097,7 @@
 			isa = PBXGroup;
 			children = (
 				BB28C755268956C900BDC834 /* Foundation.framework */,
+				49C0D0202D2F000100000003 /* ghostty-vt.xcframework */,
 				BBAEE338249B58E80069EBB5 /* libbz2.tbd */,
 				BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */,
 				BB235536235D49B300139E00 /* CoreLocation.framework */,
@@ -2192,6 +2203,7 @@
 				BBC3863F276817AD00CC8C2E /* CurrentRoot.m in Sources */,
 				BB28C79626896B1F00BDC834 /* ProgressReportViewController.m in Sources */,
 				BB28C79726896B1F00BDC834 /* TerminalView.m in Sources */,
+				49C0D0122D2F000100000002 /* GhosttyTerminalDisplay.m in Sources */,
 				497A08BF29633FF400B323CF /* mach_exc.defs in Sources */,
 				BB28C79826896B1F00BDC834 /* ScrollbarView.m in Sources */,
 				BB28C79926896B1F00BDC834 /* DelayedUITask.m in Sources */,

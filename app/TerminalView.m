@@ -16,19 +16,51 @@ struct rowcol {
     int col;
 };
 
-@interface WeakScriptMessageHandler : NSObject <WKScriptMessageHandler>
-@property (weak) id <WKScriptMessageHandler> handler;
+@interface TerminalTextPosition : UITextPosition
+@property (nonatomic) NSInteger offset;
++ (instancetype)positionWithOffset:(NSInteger)offset;
 @end
-@implementation WeakScriptMessageHandler
-- (instancetype)initWithHandler:(id <WKScriptMessageHandler>)handler {
-    if (self = [super init]) {
-        self.handler = handler;
-    }
-    return self;
+
+@implementation TerminalTextPosition
++ (instancetype)positionWithOffset:(NSInteger)offset {
+    TerminalTextPosition *position = [TerminalTextPosition new];
+    position.offset = offset;
+    return position;
 }
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    [self.handler userContentController:userContentController didReceiveScriptMessage:message];
+@end
+
+@interface TerminalTextRange : UITextRange
+@property (nonatomic, strong) TerminalTextPosition *terminalStart;
+@property (nonatomic, strong) TerminalTextPosition *terminalEnd;
++ (instancetype)rangeWithStart:(NSInteger)start end:(NSInteger)end;
+@end
+
+@implementation TerminalTextRange
++ (instancetype)rangeWithStart:(NSInteger)start end:(NSInteger)end {
+    TerminalTextRange *range = [TerminalTextRange new];
+    range.terminalStart = [TerminalTextPosition positionWithOffset:MIN(start, end)];
+    range.terminalEnd = [TerminalTextPosition positionWithOffset:MAX(start, end)];
+    return range;
 }
+- (UITextPosition *)start { return self.terminalStart; }
+- (UITextPosition *)end { return self.terminalEnd; }
+- (BOOL)isEmpty { return self.terminalStart.offset == self.terminalEnd.offset; }
+@end
+
+@interface TerminalSelectionRect : UITextSelectionRect
+@property (nonatomic) CGRect terminalRect;
+@property (nonatomic, strong) UITextRange *terminalRange;
+@property (nonatomic) BOOL terminalContainsStart;
+@property (nonatomic) BOOL terminalContainsEnd;
+@end
+
+@implementation TerminalSelectionRect
+- (CGRect)rect { return self.terminalRect; }
+- (UITextRange *)range { return self.terminalRange; }
+- (UITextWritingDirection)writingDirection { return UITextWritingDirectionLeftToRight; }
+- (BOOL)containsStart { return self.terminalContainsStart; }
+- (BOOL)containsEnd { return self.terminalContainsEnd; }
+- (BOOL)isVertical { return NO; }
 @end
 
 @interface TerminalView ()
@@ -37,14 +69,19 @@ struct rowcol {
 @property ScrollbarView *scrollbarView;
 @property (nonatomic) BOOL terminalFocused;
 
-@property (nullable) NSString *markedText;
-@property (nullable) NSString *selectedText;
-@property UITextRange *markedRange;
-@property UITextRange *selectedRange;
+@property (nullable, nonatomic, copy) NSString *markedText;
+@property (nullable, nonatomic, copy) NSString *selectedText;
+@property (nonatomic, strong) UITextRange *markedRange;
+@property (nonatomic, strong) UITextRange *selectedRange;
 
 @property struct rowcol floatingCursor;
 @property CGSize floatingCursorSensitivity;
 @property CGSize actualFloatingCursorSensitivity;
+@property BOOL updatingScrollOffsetFromTerminal;
+@property UITapGestureRecognizer *focusTapGesture;
+@property UITapGestureRecognizer *selectionTapGesture;
+@property UITextView *selectionTextView;
+@property (nonatomic) id<UIInteraction> textInteraction;
 
 @end
 
@@ -78,8 +115,35 @@ struct rowcol {
         });
     }];
 
-    self.markedRange = [UITextRange new];
-    self.selectedRange = [UITextRange new];
+    tokenizer = [[UITextInputStringTokenizer alloc] initWithTextInput:self];
+    self.markedRange = [TerminalTextRange rangeWithStart:0 end:0];
+    self.selectedRange = [TerminalTextRange rangeWithStart:0 end:0];
+
+    self.focusTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTerminal:)];
+    self.focusTapGesture.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:self.focusTapGesture];
+
+    UITextView *selectionTextView = self.selectionTextView = [[UITextView alloc] initWithFrame:self.bounds];
+    selectionTextView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    selectionTextView.backgroundColor = UIColor.clearColor;
+    selectionTextView.opaque = NO;
+    selectionTextView.editable = NO;
+    selectionTextView.selectable = YES;
+    selectionTextView.scrollEnabled = NO;
+    selectionTextView.textContainerInset = UIEdgeInsetsZero;
+    selectionTextView.textContainer.lineFragmentPadding = 0;
+    selectionTextView.textContainer.lineBreakMode = NSLineBreakByClipping;
+    selectionTextView.textColor = [UIColor colorWithWhite:1 alpha:0.01];
+    selectionTextView.tintColor = UIColor.systemBlueColor;
+    selectionTextView.autocorrectionType = UITextAutocorrectionTypeNo;
+    selectionTextView.spellCheckingType = UITextSpellCheckingTypeNo;
+    selectionTextView.hidden = YES;
+    selectionTextView.layer.needsDisplayOnBoundsChange = YES;
+    [self addSubview:selectionTextView];
+
+    self.selectionTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTerminal:)];
+    self.selectionTapGesture.cancelsTouchesInView = NO;
+    [selectionTextView addGestureRecognizer:self.selectionTapGesture];
 }
 
 - (void)dealloc {
@@ -95,8 +159,6 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink"};
-
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
         [_terminal removeObserver:self forKeyPath:@"loaded"];
@@ -111,45 +173,41 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (void)installTerminalView {
     NSAssert(_terminal.loaded, @"should probably not be installing a non-loaded terminal");
-    UIView *superview = self.terminal.webView.superview;
+    UIView *superview = self.terminal.displayView.superview;
     if (superview != nil) {
         NSAssert(superview == self.scrollbarView, @"installing terminal that is already installed elsewhere");
         return;
     }
 
-    WKWebView *webView = _terminal.webView;
+    GhosttyTerminalDisplay *displayView = _terminal.displayView;
+    displayView.delegate = self;
     _terminal.enableVoiceOverAnnounce = YES;
-    webView.scrollView.scrollEnabled = NO;
-    webView.scrollView.delaysContentTouches = NO;
-    webView.scrollView.canCancelContentTouches = NO;
-    webView.scrollView.panGestureRecognizer.enabled = NO;
-    id <WKScriptMessageHandler> handler = [[WeakScriptMessageHandler alloc] initWithHandler:self];
-    for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
-        [webView.configuration.userContentController addScriptMessageHandler:handler name:HANDLERS[i]];
-    }
-    webView.frame = self.bounds;
-    self.opaque = webView.opaque = NO;
-    webView.backgroundColor = UIColor.clearColor;
-    webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    displayView.frame = self.bounds;
+    self.opaque = displayView.opaque = YES;
+    displayView.backgroundColor = UIColor.clearColor;
+    displayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    self.scrollbarView.contentView = webView;
-    [self.scrollbarView addSubview:webView];
+    self.scrollbarView.contentView = displayView;
+    [self.scrollbarView addSubview:displayView];
+    self.selectionTextView.hidden = NO;
+    [self bringSubviewToFront:self.selectionTextView];
+    [self updateSelectionTextView];
 }
 
 - (void)uninstallTerminalView {
     // remove old terminal
-    UIView *superview = _terminal.webView.superview;
+    UIView *superview = _terminal.displayView.superview;
     if (superview != self.scrollbarView) {
         NSAssert(superview == nil, @"uninstalling terminal that is installed elsewhere");
         return;
     }
 
-    [_terminal.webView removeFromSuperview];
+    [_terminal.displayView removeFromSuperview];
     self.scrollbarView.contentView = nil;
-    for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
-        [_terminal.webView.configuration.userContentController removeScriptMessageHandlerForName:HANDLERS[i]];
-    }
     _terminal.enableVoiceOverAnnounce = NO;
+    _terminal.displayView.delegate = _terminal;
+    self.selectionTextView.hidden = YES;
+    self.selectionTextView.text = @"";
 }
 
 #pragma mark Styling
@@ -165,21 +223,16 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     if (self.overrideAppearance != OverrideAppearanceNone) {
         palette = self.overrideAppearance == OverrideAppearanceLight ? prefs.theme.lightPalette : prefs.theme.darkPalette;
     }
-    NSMutableDictionary<NSString *, id> *themeInfo = [@{
-        @"fontFamily": prefs.fontFamily,
-        @"fontSize": @(self.effectiveFontSize),
-        @"foregroundColor": palette.foregroundColor,
-        @"backgroundColor": palette.backgroundColor,
-        @"blinkCursor": @(prefs.blinkCursor),
-        @"cursorShape": prefs.htermCursorShape,
-    } mutableCopy];
-    if (prefs.palette.colorPaletteOverrides) {
-        themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
-    }
-    NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
-    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(id result, NSError *error){
-        [self updateFloatingCursorSensitivity];
-    }];
+    [self.terminal.displayView updateFontFamily:prefs.fontFamily
+                                       fontSize:self.effectiveFontSize
+                                foregroundColor:palette.foregroundColor
+                                backgroundColor:palette.backgroundColor
+                                    cursorColor:palette.cursorColor
+                          colorPaletteOverrides:palette.colorPaletteOverrides
+                                    blinkCursor:prefs.blinkCursor
+                                    cursorShape:prefs.htermCursorShape];
+    [self updateFloatingCursorSensitivity];
+    [self updateSelectionTextView];
 }
 
 - (void)setOverrideFontSize:(CGFloat)overrideFontSize {
@@ -202,8 +255,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (void)setTerminalFocused:(BOOL)terminalFocused {
     _terminalFocused = terminalFocused;
-    NSString *script = terminalFocused ? @"exports.setFocused(true)" : @"exports.setFocused(false)";
-    [self.terminal.webView evaluateJavaScript:script completionHandler:nil];
+    self.terminal.displayView.terminalFocused = terminalFocused;
 }
 
 - (BOOL)becomeFirstResponder {
@@ -224,6 +276,17 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (IBAction)loseFocus:(id)sender {
     [self resignFirstResponder];
+}
+
+- (void)focusTerminal:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded)
+        return;
+    if (self.terminal.displayView.hasSelection) {
+        self.selectedTextRange = [TerminalTextRange rangeWithStart:0 end:0];
+        return;
+    }
+    self.selectionTextView.selectedRange = NSMakeRange(0, 0);
+    [self becomeFirstResponder];
 }
 
 - (void)willMoveToWindow:(UIWindow *)newWindow {
@@ -248,27 +311,51 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     }
 }
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    if ([message.name isEqualToString:@"syncFocus"]) {
-        self.terminalFocused = self.terminalFocused;
-    } else if ([message.name isEqualToString:@"focus"]) {
-        if (!self.isFirstResponder) {
-            [self becomeFirstResponder];
-        }
-    } else if ([message.name isEqualToString:@"newScrollHeight"]) {
-        self.scrollbarView.contentSize = CGSizeMake(0, [message.body doubleValue]);
-    } else if ([message.name isEqualToString:@"newScrollTop"]) {
-        CGFloat newOffset = [message.body doubleValue];
-        if (self.scrollbarView.contentOffset.y == newOffset)
-            return;
-        [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
-    } else if ([message.name isEqualToString:@"openLink"]) {
-        [UIApplication openURL:message.body];
-    }
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (self.updatingScrollOffsetFromTerminal)
+        return;
+    CGFloat row = scrollView.contentOffset.y / MAX(1, self.terminal.displayView.characterSize.height);
+    [self.terminal.displayView scrollToRowOffset:(NSUInteger) llround(row)];
+    [self updateSelectionTextView];
 }
 
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
+- (void)ghosttyTerminalDisplayDidResize:(GhosttyTerminalDisplay *)display columns:(int)columns rows:(int)rows {
+    [self.terminal ghosttyTerminalDisplayDidResize:display columns:columns rows:rows];
+    [self updateFloatingCursorSensitivity];
+    [self updateSelectionTextView];
+}
+
+- (void)ghosttyTerminalDisplay:(GhosttyTerminalDisplay *)display writePtyBytes:(const uint8_t *)bytes length:(size_t)length {
+    [self.terminal ghosttyTerminalDisplay:display writePtyBytes:bytes length:length];
+}
+
+- (void)ghosttyTerminalDisplayDidUpdateScrollback:(GhosttyTerminalDisplay *)display totalRows:(NSUInteger)totalRows offset:(NSUInteger)offset visibleRows:(NSUInteger)visibleRows {
+    (void) display;
+    CGFloat rowHeight = MAX(1, self.terminal.displayView.characterSize.height);
+    CGSize contentSize = CGSizeMake(0, MAX(self.scrollbarView.bounds.size.height, totalRows * rowHeight));
+    CGPoint contentOffset = CGPointMake(0, offset * rowHeight);
+    self.updatingScrollOffsetFromTerminal = YES;
+    self.scrollbarView.contentSize = contentSize;
+    if (fabs(self.scrollbarView.contentOffset.y - contentOffset.y) >= 1)
+        [self.scrollbarView setContentOffset:contentOffset animated:NO];
+    self.updatingScrollOffsetFromTerminal = NO;
+    (void) visibleRows;
+    [self updateSelectionTextView];
+}
+
+- (void)updateSelectionTextView {
+    if (!self.terminal.loaded)
+        return;
+    GhosttyTerminalDisplay *displayView = self.terminal.displayView;
+    [UIView performWithoutAnimation:^{
+        self.selectionTextView.font = displayView.selectionFont;
+        self.selectionTextView.text = displayView.visibleText;
+        self.selectionTextView.frame = self.bounds;
+        CGSize textContainerSize = CGSizeMake(MAX(self.bounds.size.width, displayView.columns * displayView.characterSize.width),
+                                              MAX(self.bounds.size.height, displayView.rows * displayView.characterSize.height));
+        self.selectionTextView.textContainer.size = textContainerSize;
+        [self.selectionTextView layoutIfNeeded];
+    }];
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {
@@ -293,6 +380,8 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (void)insertText:(NSString *)text {
     self.markedText = nil;
+    if (self.terminal.displayView.hasSelection)
+        self.selectedTextRange = [TerminalTextRange rangeWithStart:0 end:0];
 
     if (self.controlKey.highlighted)
         self.controlKey.selected = YES;
@@ -352,9 +441,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 - (NSString *)textInRange:(UITextRange *)range {
     if (range == self.markedRange)
         return self.markedText;
-    if (range == self.selectedRange)
-        return @"";
-    return nil;
+    return [self.terminal.displayView textInCellRange:[self cellRangeFromTextRange:range]];
 }
 
 - (id)insertDictationResultPlaceholder {
@@ -373,25 +460,31 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 }
 
 - (void)copy:(id)sender {
-    [self.terminal.webView evaluateJavaScript:@"exports.copy()" completionHandler:nil];
+    NSString *selection = [self textInRange:self.selectedTextRange];
+    if (selection.length > 0)
+        UIPasteboard.generalPasteboard.string = selection;
+    else
+        [self.terminal.displayView copyScreenToPasteboard];
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    if (action == @selector(copy:))
+        return self.terminal.displayView.hasSelection;
+    if (action == @selector(paste:))
+        return UIPasteboard.generalPasteboard.hasStrings;
+    return [super canPerformAction:action withSender:sender];
 }
 
 - (void)clearScrollback:(UIKeyCommand *)command {
-    [self.terminal.webView evaluateJavaScript:@"exports.clearScrollback()" completionHandler:nil];
+    [self.terminal.displayView clearScrollback];
 }
 
 #pragma mark Floating cursor
 
 - (void)updateFloatingCursorSensitivity {
-    [self.terminal.webView evaluateJavaScript:@"exports.getCharacterSize()" completionHandler:^(NSArray *charSizeRaw, NSError *error) {
-        if (error != nil) {
-            NSLog(@"error getting character size: %@", error);
-            return;
-        }
-        CGSize charSize = CGSizeMake([charSizeRaw[0] doubleValue], [charSizeRaw[1] doubleValue]);
-        double sensitivity = 0.5;
-        self.floatingCursorSensitivity = CGSizeMake(charSize.width / sensitivity, charSize.height / sensitivity);
-    }];
+    CGSize charSize = self.terminal.displayView.characterSize;
+    double sensitivity = 0.5;
+    self.floatingCursorSensitivity = CGSizeMake(charSize.width / sensitivity, charSize.height / sensitivity);
 }
 
 - (struct rowcol)rowcolFromPoint:(CGPoint)point {
@@ -583,27 +676,174 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 #define LogStub()
 #endif
 
+- (NSInteger)clampedTextOffset:(NSInteger)offset {
+    return MAX(0, MIN(self.terminal.displayView.cellCount, offset));
+}
+
+- (TerminalTextPosition *)terminalPositionFromTextPosition:(UITextPosition *)position {
+    if (![position isKindOfClass:TerminalTextPosition.class])
+        return nil;
+    return (TerminalTextPosition *) position;
+}
+
+- (TerminalTextRange *)terminalRangeFromTextRange:(UITextRange *)range {
+    if (![range isKindOfClass:TerminalTextRange.class])
+        return nil;
+    TerminalTextRange *terminalRange = (TerminalTextRange *) range;
+    NSInteger start = [self clampedTextOffset:terminalRange.terminalStart.offset];
+    NSInteger end = [self clampedTextOffset:terminalRange.terminalEnd.offset];
+    return [TerminalTextRange rangeWithStart:start end:end];
+}
+
+- (NSRange)cellRangeFromTextRange:(UITextRange *)range {
+    TerminalTextRange *terminalRange = [self terminalRangeFromTextRange:range];
+    if (terminalRange == nil)
+        return NSMakeRange(0, 0);
+    NSInteger start = terminalRange.terminalStart.offset;
+    NSInteger end = terminalRange.terminalEnd.offset;
+    return NSMakeRange((NSUInteger) start, (NSUInteger) MAX(0, end - start));
+}
+
+- (CGPoint)displayPointFromTextInputPoint:(CGPoint)point {
+    return [self convertPoint:point toView:self.terminal.displayView];
+}
+
+- (CGRect)textInputRectFromDisplayRect:(CGRect)rect {
+    return [self convertRect:rect fromView:self.terminal.displayView];
+}
+
 - (NSWritingDirection)baseWritingDirectionForPosition:(nonnull UITextPosition *)position inDirection:(UITextStorageDirection)direction { LogStub(); return NSWritingDirectionLeftToRight; }
 - (void)setBaseWritingDirection:(NSWritingDirection)writingDirection forRange:(nonnull UITextRange *)range { LogStub(); }
-- (UITextPosition *)beginningOfDocument { LogStub(); return nil; }
-- (CGRect)caretRectForPosition:(nonnull UITextPosition *)position { LogStub(); return CGRectZero; }
-- (nullable UITextRange *)characterRangeAtPoint:(CGPoint)point { LogStub(); return nil; }
-- (nullable UITextRange *)characterRangeByExtendingPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction { LogStub(); return nil; }
-- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point { LogStub(); return nil; }
-- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(nonnull UITextRange *)range { LogStub(); return nil; }
-- (NSComparisonResult)comparePosition:(nonnull UITextPosition *)position toPosition:(nonnull UITextPosition *)other { LogStub(); return NSOrderedSame; }
-- (UITextPosition *)endOfDocument { LogStub(); return nil; }
-- (CGRect)firstRectForRange:(nonnull UITextRange *)range { LogStub(); return CGRectZero; }
+- (UITextPosition *)beginningOfDocument { LogStub(); return [TerminalTextPosition positionWithOffset:0]; }
+- (CGRect)caretRectForPosition:(nonnull UITextPosition *)position {
+    TerminalTextPosition *terminalPosition = [self terminalPositionFromTextPosition:position];
+    if (terminalPosition == nil)
+        return CGRectZero;
+    NSInteger offset = [self clampedTextOffset:terminalPosition.offset];
+    NSInteger rectOffset = MIN(offset, MAX(0, self.terminal.displayView.cellCount - 1));
+    CGRect rect = [self textInputRectFromDisplayRect:[self.terminal.displayView firstRectForCellRange:NSMakeRange((NSUInteger) rectOffset, 1)]];
+    if (offset == self.terminal.displayView.cellCount)
+        rect.origin.x = CGRectGetMaxX(rect);
+    rect.size.width = 2;
+    return rect;
+}
+- (nullable UITextRange *)characterRangeAtPoint:(CGPoint)point {
+    NSInteger offset = [self.terminal.displayView cellOffsetAtPoint:[self displayPointFromTextInputPoint:point]];
+    if (offset >= self.terminal.displayView.cellCount)
+        return nil;
+    return [TerminalTextRange rangeWithStart:offset end:offset + 1];
+}
+- (nullable UITextRange *)characterRangeByExtendingPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction {
+    TerminalTextPosition *terminalPosition = [self terminalPositionFromTextPosition:position];
+    if (terminalPosition == nil)
+        return nil;
+    NSInteger offset = [self clampedTextOffset:terminalPosition.offset];
+    if (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionUp)
+        return [TerminalTextRange rangeWithStart:MAX(0, offset - 1) end:offset];
+    return [TerminalTextRange rangeWithStart:offset end:MIN(self.terminal.displayView.cellCount, offset + 1)];
+}
+- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point {
+    NSInteger offset = [self.terminal.displayView cellOffsetAtPoint:[self displayPointFromTextInputPoint:point]];
+    return [TerminalTextPosition positionWithOffset:offset];
+}
+- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(nonnull UITextRange *)range {
+    TerminalTextRange *terminalRange = [self terminalRangeFromTextRange:range];
+    if (terminalRange == nil)
+        return nil;
+    NSInteger offset = [self.terminal.displayView cellOffsetAtPoint:[self displayPointFromTextInputPoint:point]];
+    offset = MAX(terminalRange.terminalStart.offset, MIN(terminalRange.terminalEnd.offset, offset));
+    return [TerminalTextPosition positionWithOffset:offset];
+}
+- (NSComparisonResult)comparePosition:(nonnull UITextPosition *)position toPosition:(nonnull UITextPosition *)other {
+    TerminalTextPosition *lhs = [self terminalPositionFromTextPosition:position];
+    TerminalTextPosition *rhs = [self terminalPositionFromTextPosition:other];
+    if (lhs == nil || rhs == nil)
+        return NSOrderedSame;
+    if (lhs.offset < rhs.offset)
+        return NSOrderedAscending;
+    if (lhs.offset > rhs.offset)
+        return NSOrderedDescending;
+    return NSOrderedSame;
+}
+- (UITextPosition *)endOfDocument { LogStub(); return [TerminalTextPosition positionWithOffset:self.terminal.displayView.cellCount]; }
+- (CGRect)firstRectForRange:(nonnull UITextRange *)range {
+    return [self textInputRectFromDisplayRect:[self.terminal.displayView firstRectForCellRange:[self cellRangeFromTextRange:range]]];
+}
 - (NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); return nil; }
 - (void)setMarkedTextStyle:(NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); }
-- (NSInteger)offsetFromPosition:(nonnull UITextPosition *)from toPosition:(nonnull UITextPosition *)toPosition { LogStub(); return 0; }
-- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset { LogStub(); return nil; }
-- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position offset:(NSInteger)offset { LogStub(); return nil; }
-- (nullable UITextPosition *)positionWithinRange:(nonnull UITextRange *)range farthestInDirection:(UITextLayoutDirection)direction { LogStub(); return nil; }
-- (void)replaceRange:(nonnull UITextRange *)range withText:(nonnull NSString *)text { LogStub(); }
-- (void)setSelectedTextRange:(UITextRange *)selectedTextRange { LogStub(); }
-- (nonnull NSArray<UITextSelectionRect *> *)selectionRectsForRange:(nonnull UITextRange *)range { LogStub(); return @[]; }
-- (nullable UITextRange *)textRangeFromPosition:(nonnull UITextPosition *)fromPosition toPosition:(nonnull UITextPosition *)toPosition { LogStub(); return nil; }
+- (NSInteger)offsetFromPosition:(nonnull UITextPosition *)from toPosition:(nonnull UITextPosition *)toPosition {
+    TerminalTextPosition *start = [self terminalPositionFromTextPosition:from];
+    TerminalTextPosition *end = [self terminalPositionFromTextPosition:toPosition];
+    if (start == nil || end == nil)
+        return 0;
+    return end.offset - start.offset;
+}
+- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset {
+    TerminalTextPosition *terminalPosition = [self terminalPositionFromTextPosition:position];
+    if (terminalPosition == nil)
+        return nil;
+    NSInteger delta = offset;
+    if (direction == UITextLayoutDirectionLeft)
+        delta = -offset;
+    else if (direction == UITextLayoutDirectionUp)
+        delta = -offset * self.terminal.displayView.columns;
+    else if (direction == UITextLayoutDirectionDown)
+        delta = offset * self.terminal.displayView.columns;
+    return [TerminalTextPosition positionWithOffset:[self clampedTextOffset:terminalPosition.offset + delta]];
+}
+- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position offset:(NSInteger)offset {
+    TerminalTextPosition *terminalPosition = [self terminalPositionFromTextPosition:position];
+    if (terminalPosition == nil)
+        return nil;
+    return [TerminalTextPosition positionWithOffset:[self clampedTextOffset:terminalPosition.offset + offset]];
+}
+- (nullable UITextPosition *)positionWithinRange:(nonnull UITextRange *)range farthestInDirection:(UITextLayoutDirection)direction {
+    TerminalTextRange *terminalRange = [self terminalRangeFromTextRange:range];
+    if (terminalRange == nil)
+        return nil;
+    if (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionUp)
+        return terminalRange.terminalStart;
+    return terminalRange.terminalEnd;
+}
+- (void)replaceRange:(nonnull UITextRange *)range withText:(nonnull NSString *)text {
+    (void) range;
+    [self insertText:text];
+}
+- (void)setSelectedTextRange:(UITextRange *)selectedTextRange {
+    TerminalTextRange *terminalRange = [self terminalRangeFromTextRange:selectedTextRange];
+    if (terminalRange == nil)
+        terminalRange = [TerminalTextRange rangeWithStart:0 end:0];
+    [self.inputDelegate selectionWillChange:self];
+    self.selectedRange = terminalRange;
+    if (terminalRange.empty)
+        [self.terminal.displayView clearSelection];
+    else
+        [self.terminal.displayView setSelectionFromCellOffset:terminalRange.terminalStart.offset
+                                                 toCellOffset:terminalRange.terminalEnd.offset];
+    [self.inputDelegate selectionDidChange:self];
+}
+- (nonnull NSArray<UITextSelectionRect *> *)selectionRectsForRange:(nonnull UITextRange *)range {
+    NSRange cellRange = [self cellRangeFromTextRange:range];
+    NSArray<NSValue *> *rectValues = [self.terminal.displayView rectsForCellRange:cellRange];
+    NSMutableArray<UITextSelectionRect *> *rects = [NSMutableArray arrayWithCapacity:rectValues.count];
+    for (NSUInteger i = 0; i < rectValues.count; i++) {
+        TerminalSelectionRect *selectionRect = [TerminalSelectionRect new];
+        selectionRect.terminalRect = [self textInputRectFromDisplayRect:rectValues[i].CGRectValue];
+        selectionRect.terminalRange = range;
+        selectionRect.terminalContainsStart = i == 0;
+        selectionRect.terminalContainsEnd = i == rectValues.count - 1;
+        [rects addObject:selectionRect];
+    }
+    return rects;
+}
+- (nullable UITextRange *)textRangeFromPosition:(nonnull UITextPosition *)fromPosition toPosition:(nonnull UITextPosition *)toPosition {
+    TerminalTextPosition *start = [self terminalPositionFromTextPosition:fromPosition];
+    TerminalTextPosition *end = [self terminalPositionFromTextPosition:toPosition];
+    if (start == nil || end == nil)
+        return nil;
+    return [TerminalTextRange rangeWithStart:[self clampedTextOffset:start.offset]
+                                         end:[self clampedTextOffset:end.offset]];
+}
 
 // conforming to UITextInput makes this view default to being an accessibility element, which blocks selecting anything in it
 - (BOOL)isAccessibilityElement { return NO; }

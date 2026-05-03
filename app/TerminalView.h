@@ -14,7 +14,7 @@ enum OverrideAppearance {
     OverrideAppearanceDark,
 };
 
-@interface TerminalView : UIView <UITextInput, WKScriptMessageHandler, UIScrollViewDelegate>
+@interface TerminalView : UIView <UITextInput, UIScrollViewDelegate, GhosttyTerminalDisplayDelegate>
 
 @property IBInspectable (nonatomic) BOOL canBecomeFirstResponder;
 
